@@ -54,6 +54,52 @@ def build_search_url(keyword: str, location: str = "Colombia") -> str:
     return path
 
 
+def search_keyword_variants(keyword: str) -> tuple[str, ...]:
+    """Return conservative deterministic broadening variants for job-title queries.
+
+    Computrabajo can return zero results for a precise title such as
+    ``Node.js Developer`` while ``Node.js`` has matching vacancies. Try a few
+    progressively broader local URLs before paying for an AI search fallback.
+    """
+    cleaned = " ".join(str(keyword or "").strip().split())
+    if not cleaned:
+        return ()
+
+    variants: list[str] = [cleaned]
+    lowered = cleaned.casefold()
+    suffixes = (
+        " developer",
+        " desarrollador",
+        " engineer",
+        " ingeniero",
+    )
+    broader = cleaned
+    for suffix in suffixes:
+        if lowered.endswith(suffix):
+            broader = cleaned[: -len(suffix)].strip()
+            break
+    if broader and broader.casefold() != cleaned.casefold():
+        variants.append(broader)
+
+    # A compound technical title can still be too narrow. Preserve the leading
+    # technology token as a final conservative variant (Python Backend -> Python).
+    parts = broader.split()
+    if len(parts) > 1:
+        first = parts[0]
+        # Keep dotted technology names such as Node.js intact.
+        if len(first) >= 2 and first.casefold() not in {item.casefold() for item in variants}:
+            variants.append(first)
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in variants:
+        key = value.casefold()
+        if value and key not in seen:
+            seen.add(key)
+            result.append(value)
+    return tuple(result[:3])
+
+
 def is_safe_computrabajo_url(url: str) -> bool:
     parsed = urlparse(url)
     return parsed.scheme == "https" and parsed.hostname == COMPUTRABAJO_HOST
@@ -135,7 +181,8 @@ class DeterministicComputrabajoSearch:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
 
     async def collect(self, *, keyword: str, location: str, max_results: int) -> DeterministicSearchResult:
-        search_url = build_search_url(keyword, location)
+        variants = search_keyword_variants(keyword)
+        search_url = build_search_url(variants[0] if variants else keyword, location)
         browser = Browser(
             user_data_dir=str(self.profile_dir.resolve()),
             headless=False,
@@ -145,18 +192,40 @@ class DeterministicComputrabajoSearch:
             await browser.start()
             cdp = await browser.get_or_create_cdp_session(browser.agent_focus_target_id, focus=True)
             await cdp.cdp_client.send.Page.enable(session_id=cdp.session_id)
-            await self._navigate(cdp, search_url)
-            listing = await self._evaluate(cdp, self._listing_script())
-            if not isinstance(listing, dict):
-                return DeterministicSearchResult((), search_url, "No se pudo leer el DOM del listado.")
 
-            current_url = str(listing.get("url") or "")
-            body = str(listing.get("body") or "")
-            if not is_safe_computrabajo_url(current_url):
-                return DeterministicSearchResult((), search_url, f"Redirección inesperada: {current_url or 'sin URL'}")
-            block_reason = self._detect_block(body)
-            if block_reason:
-                return DeterministicSearchResult((), search_url, block_reason)
+            listing: dict[str, object] | None = None
+            attempted_urls: list[str] = []
+            for variant in variants or (keyword,):
+                candidate_search_url = build_search_url(variant, location)
+                attempted_urls.append(candidate_search_url)
+                await self._navigate(cdp, candidate_search_url)
+                candidate_listing = await self._read_listing(cdp)
+                if not isinstance(candidate_listing, dict):
+                    continue
+
+                current_url = str(candidate_listing.get("url") or "")
+                body = str(candidate_listing.get("body") or "")
+                if not is_safe_computrabajo_url(current_url):
+                    return DeterministicSearchResult(
+                        (), candidate_search_url, f"Redirección inesperada: {current_url or 'sin URL'}"
+                    )
+                block_reason = self._detect_block(body)
+                if block_reason:
+                    return DeterministicSearchResult((), candidate_search_url, block_reason)
+
+                candidates = candidate_listing.get("jobs") or []
+                if isinstance(candidates, list) and candidates:
+                    listing = candidate_listing
+                    search_url = candidate_search_url
+                    break
+
+            if listing is None:
+                attempted = ", ".join(attempted_urls)
+                return DeterministicSearchResult(
+                    (),
+                    search_url,
+                    f"No se encontraron enlaces de vacantes reconocibles tras variantes determinísticas: {attempted}",
+                )
 
             candidates = listing.get("jobs") or []
             if not isinstance(candidates, list):
@@ -204,10 +273,24 @@ class DeterministicComputrabajoSearch:
                     )
                 )
 
-            reason = "" if jobs else "No se encontraron enlaces de vacantes reconocibles en el DOM."
+            reason = "" if jobs else "El listado tenía enlaces, pero ninguna vacante válida pudo normalizarse."
             return DeterministicSearchResult(tuple(jobs), search_url, reason)
         finally:
             await browser.stop()
+
+    async def _read_listing(self, cdp: Any) -> dict[str, object] | None:
+        """Poll briefly for client-rendered vacancy links before declaring no results."""
+        latest: dict[str, object] | None = None
+        for attempt in range(10):
+            value = await self._evaluate(cdp, self._listing_script())
+            if isinstance(value, dict):
+                latest = value
+                jobs = value.get("jobs") or []
+                if isinstance(jobs, list) and jobs:
+                    return value
+            if attempt < 9:
+                await asyncio.sleep(0.3)
+        return latest
 
     async def _navigate(self, cdp: Any, url: str) -> None:
         if not is_safe_computrabajo_url(url):
