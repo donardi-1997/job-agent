@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from job_agent.cv_profile import CVProfileService
 from job_agent.profile import ProfileStore
 
@@ -53,16 +55,8 @@ def test_cv_import_preserves_application_specific_profile_facts(tmp_path: Path) 
 def test_cv_import_rejects_unsupported_and_too_short_files(tmp_path: Path) -> None:
 	service = CVProfileService(tmp_path / 'job-agent.db', tmp_path / 'cv')
 
-	try:
+	with pytest.raises(ValueError, match='Formato no soportado'):
 		service.import_bytes('cv.exe', b'not a cv')
-		except ValueError as exc:
-		assert 'Formato no soportado' in str(exc)
-	else:
-		raise AssertionError('Unsupported CV extension should fail')
 
-	try:
+	with pytest.raises(ValueError, match='suficiente texto'):
 		service.import_bytes('cv.txt', b'too short')
-		except ValueError as exc:
-		assert 'suficiente texto' in str(exc)
-	else:
-		raise AssertionError('Too-short CV should fail')
