@@ -37,6 +37,8 @@ class DeterministicSearchResult:
 def _slug(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value)
     ascii_value = "".join(char for char in normalized if not unicodedata.combining(char))
+    # Computrabajo commonly collapses dotted abbreviations such as D.C. -> dc.
+    ascii_value = ascii_value.replace(".", "")
     return re.sub(r"[^a-z0-9]+", "-", ascii_value.casefold()).strip("-")
 
 
