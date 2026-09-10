@@ -22,6 +22,21 @@ def test_search_request_normalizes_text_and_limits_results() -> None:
 		SearchRequest(keyword="Python", location="Colombia", max_results=51)
 
 
+def test_search_ai_fallback_is_bounded_and_computrabajo_only(monkeypatch: pytest.MonkeyPatch) -> None:
+	request = SearchRequest(keyword="Node.js Developer", location="Colombia", max_results=25)
+	task = ComputrabajoCollector._build_task(request)
+
+	assert "Use Computrabajo only" in task
+	assert "Do not navigate to Google" in task
+	assert ComputrabajoCollector._search_ai_max_steps() == 20
+
+	monkeypatch.setenv("JOB_AGENT_SEARCH_AI_MAX_STEPS", "12")
+	assert ComputrabajoCollector._search_ai_max_steps() == 12
+
+	monkeypatch.setenv("JOB_AGENT_SEARCH_AI_MAX_STEPS", "999")
+	assert ComputrabajoCollector._search_ai_max_steps() == 40
+
+
 def test_persist_deduplicates_jobs_and_uses_local_profile(tmp_path: Path) -> None:
 	store = JobStore(tmp_path / "jobs.db")
 	collector = ComputrabajoCollector(store=store, profile_dir=tmp_path / "browser-profile")
