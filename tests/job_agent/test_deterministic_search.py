@@ -9,6 +9,7 @@ from job_agent.computrabajo.deterministic import (
     SearchExecutionStore,
     build_search_url,
     is_safe_computrabajo_url,
+    search_keyword_variants,
 )
 from job_agent.storage import JobStore
 
@@ -20,6 +21,16 @@ def test_build_search_url_is_deterministic_and_slugged() -> None:
     assert build_search_url("Python Developer", "Bogotá D.C.") == (
         "https://co.computrabajo.com/trabajo-de-python-developer-en-bogota-dc"
     )
+
+
+def test_search_keyword_variants_broaden_precise_titles_before_ai() -> None:
+    assert search_keyword_variants("Node.js Developer") == ("Node.js Developer", "Node.js")
+    assert search_keyword_variants("Python Backend Developer") == (
+        "Python Backend Developer",
+        "Python Backend",
+        "Python",
+    )
+    assert search_keyword_variants("DevOps Engineer") == ("DevOps Engineer", "DevOps")
 
 
 def test_deterministic_navigation_accepts_only_computrabajo_https() -> None:
