@@ -21,7 +21,13 @@ def _job(store: JobStore, external_id: str, *, status: str = "applied") -> int:
 			)
 		]
 	)
-	return int(store.list_jobs()[0]["id"])
+	with store.connect() as connection:
+		row = connection.execute(
+			"SELECT id FROM jobs WHERE source = ? AND external_id = ?",
+			("computrabajo", external_id),
+		).fetchone()
+	assert row is not None
+	return int(row["id"])
 
 
 def test_contact_followup_is_persisted_for_applied_job(tmp_path):
