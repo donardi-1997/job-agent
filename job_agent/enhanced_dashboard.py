@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from job_agent.credentials import CredentialStore
 from job_agent.dashboard import DashboardHandler, STATIC_DIR
 from job_agent.followup import ContactTracker, ContactUpdate
+from job_agent.profile import UserProfile
 
 
 CONTACT_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/contact$")
@@ -44,6 +45,7 @@ class EnhancedDashboardHandler(DashboardHandler):
 				"costs.js",
 				"automation_control.js",
 				"cv_control.js",
+				"profile_summary_control.js",
 				"contact_tracking.js",
 				"credentials_control.js",
 			):
@@ -66,6 +68,9 @@ class EnhancedDashboardHandler(DashboardHandler):
 			return
 		if parsed.path == "/credentials_control.js":
 			self._send_static("credentials_control.js", "text/javascript; charset=utf-8")
+			return
+		if parsed.path == "/profile_summary_control.js":
+			self._send_static("profile_summary_control.js", "text/javascript; charset=utf-8")
 			return
 		if parsed.path == "/api/currency":
 			rate = _usd_cop_rate()
@@ -94,6 +99,36 @@ class EnhancedDashboardHandler(DashboardHandler):
 
 	def do_POST(self) -> None:  # noqa: N802
 		parsed = urlparse(self.path)
+		if parsed.path == "/api/profile/summary":
+			try:
+				body = self._read_json()
+				summary = body.get("professional_summary")
+				if not isinstance(summary, str):
+					raise ValueError("professional_summary must be a string")
+				current = self.profile_store.get()
+				profile = UserProfile.model_validate({**current.model_dump(), "professional_summary": summary})
+				self.profile_store.save(profile)
+				self._send_json({
+					"professional_summary": profile.professional_summary,
+					"chars": len(profile.professional_summary),
+					"message": "Descripción profesional guardada localmente.",
+				})
+			except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+				self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+			return
+		if parsed.path == "/api/profile":
+			# The legacy profile form does not know about fields provided by enhanced
+			# controls. Preserve them when they are omitted from the form payload.
+			try:
+				body = self._read_json()
+				current = self.profile_store.get()
+				body.setdefault("automation_enabled", current.automation_enabled)
+				body.setdefault("professional_summary", current.professional_summary)
+				profile = UserProfile.model_validate(body)
+				self._send_json(self.profile_store.save(profile).model_dump())
+			except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+				self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+			return
 		if parsed.path == "/api/computrabajo/credentials":
 			if not self._is_loopback_client():
 				self._send_json({"error": "Las credenciales solo pueden modificarse desde este PC."}, HTTPStatus.FORBIDDEN)
