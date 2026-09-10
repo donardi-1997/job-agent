@@ -28,6 +28,7 @@ def test_profile_store_round_trip(tmp_path: Path) -> None:
 
 	store.save(profile)
 	loaded = store.get()
+	candidate = loaded.to_candidate_profile()
 
 	assert loaded.target_roles == ["Python Developer", "Backend Developer"]
 	assert loaded.skills == ["Python", "FastAPI"]
@@ -35,6 +36,7 @@ def test_profile_store_round_trip(tmp_path: Path) -> None:
 	assert loaded.min_score == 65
 	assert loaded.prepare_application_score == 88
 	assert loaded.professional_summary == "Backend developer focused on Python and AWS.\n\nI build automation and AI/RAG projects."
+	assert candidate.professional_summary == loaded.professional_summary
 	assert loaded.city == "Bogotá"
 	assert loaded.english_level == "B1"
 	assert loaded.salary_expectation == "4.000.000 COP"
