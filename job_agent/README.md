@@ -21,6 +21,9 @@ This project is intentionally optimized for one user and one local browser profi
 13. Skip vacancies already marked `applied` or `ignored`.
 14. Keep batch history and application-attempt history in SQLite.
 15. Keep one persistent browser profile under `data/browser-profile`.
+16. Learn high-confidence answers from confirmed applications and explicit manual corrections.
+17. Measure Browser Use prompt, cached and completion tokens locally.
+18. Show daily, monthly and all-time AI cost estimates in the dashboard.
 
 ## Local setup
 
@@ -36,7 +39,13 @@ Create a local `.env` file with the Browser Use API key:
 BROWSER_USE_API_KEY=your_key_here
 ```
 
-Candidate and application data is configured from **Mi perfil**. The profile, answers, SQLite database and browser state remain under the gitignored `data/` directory.
+The current default browser model is `bu-2-0`. It can be changed without editing code:
+
+```env
+JOB_AGENT_BROWSER_MODEL=bu-2-0
+```
+
+Candidate and application data is configured from **Mi perfil**. The profile, learned answers, usage telemetry, SQLite database and browser state remain under the gitignored `data/` directory.
 
 Start the application:
 
@@ -65,13 +74,49 @@ one batch can search all of them automatically. A batch request may also include
 
 The app deliberately does not create users, organizations, teams or shared profiles. The local SQLite profile and the persistent local Chromium session belong to the single owner of the app.
 
+## Deterministic-first answer memory
+
+Application answers are now resolved from local data before the agent is asked to infer anything. The deterministic sources are:
+
+1. explicit profile facts such as city, English level, salary expectation and availability;
+2. manually configured frequent answers;
+3. answers learned from previously confirmed applications;
+4. answers explicitly corrected and saved by the user.
+
+Questions are normalized locally and equivalent saved questions can be matched without another model deciding what the answer should be. Learned answers are stored in the `answer_memory` SQLite table.
+
+Automatic learning is conservative: an answer from an application is learned only after a confirmed submission, when the answer was actually supplied, did not require user input and had confidence of at least 90. Explicit manual corrections are treated as user-provided facts and can be remembered directly.
+
+This reduces repeated reasoning and makes answers increasingly deterministic as the personal history grows. It does **not** currently make all browser navigation token-free: Browser Use still uses an LLM to navigate interactive Computrabajo pages. Public HTTP-only discovery is not used as the primary path because Computrabajo may require JavaScript/anti-bot verification. The architecture therefore keeps deterministic scoring, deduplication and answer reuse local while measuring the remaining browser-agent usage precisely.
+
+## AI usage and cost metering
+
+`MeteredChatBrowserUse` records the usage object returned by each Browser Use model invocation. Job Agent aggregates the real returned:
+
+- prompt tokens;
+- cached prompt tokens;
+- completion tokens;
+- total tokens.
+
+Each completed or partially completed search/application run writes one local `ai_usage_events` record. The dashboard shows:
+
+- today's token usage and estimated USD cost;
+- current month's usage and estimated USD cost;
+- all-time usage and estimated USD cost;
+- recent search/application usage events;
+- size/use count of the local answer memory.
+
+Dollar values are estimates calculated from an explicit local pricing table, while token counts come from Browser Use response metadata. If a configured model has no known local pricing entry, tokens are still recorded and the price is not silently invented.
+
+The current `bu-2-0` pricing entry is expressed per million tokens as input/cached/output rates. This table is intentionally centralized in `job_agent/ai_usage.py` so future Browser Use pricing changes can be updated without touching application logic.
+
 ## Automatic application mode
 
 Open a vacancy with **Revisar** and click **Postular automáticamente**. Browser Use opens the vacancy with the persistent local browser profile, navigates the application flow, fills supported answers, submits the application and verifies the confirmation state.
 
 Every encountered question and answer is stored. `submitted=true` is recorded only when Browser Use reports positive evidence that Computrabajo accepted the application. Successful submissions update the vacancy to `applied`.
 
-The agent may use only facts supplied by the local profile, saved answers or unambiguous page context. It must not invent personal information, qualifications, employment history, legal declarations or salary facts.
+The agent may use only facts supplied by the local profile, deterministic answer memory, saved answers or unambiguous page context. It must not invent personal information, qualifications, employment history, legal declarations or salary facts.
 
 ## Personalized multi-query autopilot
 
@@ -118,12 +163,13 @@ Discovery, individual applications and batch auto-apply share the same persisten
 - `POST /api/batch` — starts personal multi-query discovery + autonomous applications.
 - `GET /api/batch/status` — returns live batch progress, including current role search.
 - `GET /api/batch/history` — returns persisted batch history.
+- `GET /api/ai/usage` — returns daily/monthly/all-time Browser Use usage plus answer-memory metrics.
 - `GET /api/jobs` — returns locally stored vacancies.
 - `GET /api/jobs/{id}` — returns full vacancy detail.
 - `POST /api/jobs/{id}/status` — changes a review state.
 - `POST /api/jobs/{id}/prepare` — starts an individual automatic application.
 - `GET /api/jobs/{id}/draft` — loads the latest stored answers/result.
-- `POST /api/jobs/{id}/draft` — edits locally stored answers.
+- `POST /api/jobs/{id}/draft` — edits locally stored answers and remembers explicit corrections.
 - `GET /api/jobs/{id}/attempts` — returns application-attempt history.
 - `GET /api/prepare/status` — returns individual-application status.
 - `GET /api/stats` — returns dashboard KPIs.
@@ -136,7 +182,8 @@ Discovery, individual applications and batch auto-apply share the same persisten
 - no CAPTCHA, 2FA, anti-bot or access-control bypass;
 - no unrelated profile/account modification;
 - duplicate applications are skipped when local state already says `applied`;
-- success is recorded only when there is positive submission evidence.
+- success is recorded only when there is positive submission evidence;
+- automatic answer learning requires a confirmed submission and high confidence.
 
 ## Decision bands
 
