@@ -5,6 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>Job Agent</title>
 	<link rel="stylesheet" href="/app.css">
+	<link rel="stylesheet" href="/application.css">
 </head>
 <body>
 	<div class="app-shell">
@@ -30,12 +31,7 @@
 			<section><h3>Fortalezas</h3><div class="chip-list" id="matchedSkills"></div></section>
 			<section><h3>Brechas</h3><div class="chip-list gaps" id="missingSkills"></div></section>
 			<section><h3>Por qué obtuvo este score</h3><ul class="reason-list" id="matchReasons"></ul></section>
-			<section class="application-section">
-				<div class="application-heading"><div><h3>Postulación asistida</h3><p>El agente inspecciona los campos y prepara respuestas, pero nunca envía la postulación.</p></div><span class="safe-pill">REVISIÓN HUMANA</span></div>
-				<div class="prepare-status" id="prepareStatus" data-state="idle"><span class="status-indicator"></span><div><strong id="prepareStatusTitle">Sin borrador</strong><span id="prepareStatusMessage">Puedes preparar la postulación cuando quieras.</span></div></div>
-				<button class="button primary prepare-button" id="prepareButton" type="button">Preparar postulación</button>
-				<div class="draft-box hidden" id="draftBox"><div class="draft-summary" id="draftSummary"></div><div class="question-list" id="draftQuestions"></div></div>
-			</section>
+			<section class="application-section"><div class="application-heading"><div><h3>Postulación asistida</h3><p>El agente inspecciona los campos y prepara respuestas, pero nunca envía la postulación.</p></div><span class="safe-pill">REVISIÓN HUMANA</span></div><div class="prepare-status" id="prepareStatus" data-state="idle"><span class="status-indicator"></span><div><strong id="prepareStatusTitle">Sin borrador</strong><span id="prepareStatusMessage">Puedes preparar la postulación cuando quieras.</span></div></div><button class="button primary prepare-button" id="prepareButton" type="button">Preparar postulación</button><div class="draft-box hidden" id="draftBox"><div class="draft-summary" id="draftSummary"></div><div class="question-list" id="draftQuestions"></div></div></section>
 			<section><h3>Descripción</h3><p class="job-description" id="drawerDescription"></p></section>
 		</div>
 		<div class="drawer-actions"><button class="button secondary" data-job-status="ignored">Descartar</button><button class="button secondary" data-job-status="saved">Guardar</button><a class="button primary drawer-open-link" id="drawerOpenLink" target="_blank" rel="noopener noreferrer">Abrir Computrabajo</a></div>
