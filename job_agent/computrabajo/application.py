@@ -21,7 +21,7 @@ from job_agent.computrabajo.deterministic_application import (
 )
 from job_agent.credentials import CredentialStore
 from job_agent.profile import ProfileStore
-from job_agent.storage import JobStore
+from job_agent.storage import ApplicationModeStore, JobStore
 
 
 DEFAULT_PROFILE_DIR = Path("data/browser-profile")
@@ -52,6 +52,9 @@ class ApplicationDraftOutput(BaseModel):
     submission_status: str = "not_submitted"
     confirmation_text: str = ""
     confirmation_url: str = ""
+    mode: Literal["test", "real"] = "test"
+    test_mode: bool = True
+    ready_to_submit: bool = False
 
 
 class PreparationStatus(BaseModel):
@@ -70,6 +73,7 @@ class AssistedApplicationPreparer:
     def __init__(self, store: JobStore | None = None, profile_dir: Path | str = DEFAULT_PROFILE_DIR) -> None:
         self.store = store or JobStore()
         self.profile_store = ProfileStore(self.store.path)
+        self.mode_store = ApplicationModeStore(self.store.path)
         self.answer_memory = AnswerMemory(self.store.path)
         self.usage_store = AIUsageStore(self.store.path)
         self.credential_store = CredentialStore(self.store.path)
@@ -101,6 +105,12 @@ class AssistedApplicationPreparer:
             "pattern_observations": patterns["observations"],
             "pattern_successful_uses": patterns["successful_uses"],
         }
+
+    def application_mode(self) -> dict[str, str]:
+        return {"mode": self.mode_store.get()}
+
+    def set_application_mode(self, mode: str) -> dict[str, str]:
+        return {"mode": self.mode_store.set(mode)}
 
     def start(self, job_id: int) -> bool:
         with self._lock:
@@ -214,6 +224,9 @@ class AssistedApplicationPreparer:
             submission_status=result.submission_status,
             confirmation_text=result.confirmation_text,
             confirmation_url=result.confirmation_url,
+            mode=result.mode if result.mode in {"test", "real"} else "test",
+            test_mode=result.test_mode,
+            ready_to_submit=result.ready_to_submit,
         )
 
     async def _apply(self, job: dict[str, object]) -> ApplicationDraftOutput:
@@ -226,6 +239,7 @@ class AssistedApplicationPreparer:
         self._last_fallback_reason = ""
         job_id = int(job["id"])
         saved_draft = self.store.get_application_draft(job_id) or {}
+        application_mode = self.mode_store.get()
 
         local_result: DeterministicApplicationResult | None = None
         try:
@@ -233,6 +247,7 @@ class AssistedApplicationPreparer:
                 job=job,
                 profile=profile,
                 saved_draft=saved_draft,
+                mode=application_mode,
             )
             if local_result.terminal_without_ai:
                 self._last_mode = "deterministic"
@@ -271,7 +286,7 @@ class AssistedApplicationPreparer:
 
         self._last_mode = "ai_fallback"
         try:
-            result = await self._apply_with_ai(job, profile.model_dump(), saved_draft)
+            result = await self._apply_with_ai(job, profile.model_dump(), saved_draft, application_mode)
         except Exception:
             unresolved = (
                 sum(1 for item in local_result.questions if item.requires_user_input)
@@ -312,6 +327,7 @@ class AssistedApplicationPreparer:
         job: dict[str, object],
         profile: dict[str, object],
         saved_draft: dict[str, object],
+        application_mode: str = "real",
     ) -> ApplicationDraftOutput:
         known_answers = self.answer_memory.context_for_agent(self.profile_store.get())
         sensitive_credentials = self._sensitive_credentials()
@@ -329,6 +345,7 @@ class AssistedApplicationPreparer:
                     saved_draft,
                     known_answers,
                     credentials_available=bool(sensitive_credentials),
+                    application_mode=application_mode,
                 ),
                 llm=llm,
                 browser=browser,
@@ -360,6 +377,11 @@ class AssistedApplicationPreparer:
             if output is None:
                 raise RuntimeError(f"No se pudo obtener un resultado estructurado. Resultado: {(history.final_result() or '')[:300]}")
             result = output if isinstance(output, ApplicationDraftOutput) else ApplicationDraftOutput.model_validate(output)
+            if application_mode == "test":
+                result = result.model_copy(update={"mode": "test", "test_mode": True, "submitted": False,
+                    "submission_status": "test_ready" if not result.blocked_reason else "test_incomplete",
+                    "ready_to_submit": not bool(result.blocked_reason) and not any(item.requires_user_input for item in result.questions),
+                    "summary": result.summary or "Formulario completado en modo prueba. Listo para enviar."})
             self.answer_memory.remember_questions(
                 [item.model_dump() for item in result.questions],
                 submitted=result.submitted,
@@ -376,6 +398,7 @@ class AssistedApplicationPreparer:
         known_answers: list[dict[str, str]] | None = None,
         *,
         credentials_available: bool = False,
+        application_mode: str = "real",
     ) -> str:
         login_instruction = (
             "If Computrabajo requires native login, use the sensitive placeholders <secret>computrabajo_user</secret> and "
@@ -386,9 +409,9 @@ class AssistedApplicationPreparer:
         return f"""
 Open this Computrabajo vacancy: {job.get('url', '')}
 
-Goal: COMPLETE AND SUBMIT the job application for the user.
+Goal: {"COMPLETE the job application for the user. Do not submit it; stop immediately before the final submission action." if application_mode == "test" else "COMPLETE AND SUBMIT the job application for the user."}
 
-A deterministic local attempt already ran before this AI fallback. Use deterministic known answers first, then the local candidate profile and any previously saved draft answers. A saved answer takes precedence when it clearly corresponds to the same question. Do not re-infer an answer already present in deterministic memory. Navigate the application flow, fill every answer you can support, continue through intermediate steps, and click the final application/submit/confirm action when the form is ready.
+A deterministic local attempt already ran before this AI fallback. Use deterministic known answers first, then the local candidate profile and any previously saved draft answers. A saved answer takes precedence when it clearly corresponds to the same question. Do not re-infer an answer already present in deterministic memory. Navigate the application flow, fill every answer you can support, and continue through intermediate steps. {"Never click or trigger the final application/submit/confirm action in TEST mode." if application_mode == "test" else "click the final application/submit/confirm action when the form is ready."}
 
 {login_instruction}
 

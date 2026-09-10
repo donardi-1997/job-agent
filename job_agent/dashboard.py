@@ -24,12 +24,13 @@ from job_agent.computrabajo import (
 from job_agent.computrabajo.application import ApplicationDraftOutput
 from job_agent.cv_profile import CVProfileService, MAX_CV_BYTES
 from job_agent.profile import ProfileStore, UserProfile
-from job_agent.storage import JobStore
+from job_agent.storage import ApplicationModeStore, JobStore
 
 
 STATIC_DIR = Path(__file__).with_name("dashboard_static")
 STORE = JobStore()
 PROFILE_STORE = ProfileStore(STORE.path)
+APPLICATION_MODE_STORE = ApplicationModeStore(STORE.path)
 AI_USAGE_STORE = AIUsageStore(STORE.path)
 ANSWER_MEMORY = AnswerMemory(STORE.path)
 CV_PROFILE = CVProfileService(STORE.path)
@@ -46,6 +47,7 @@ JOB_ATTEMPTS_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/attempts$")
 class DashboardHandler(BaseHTTPRequestHandler):
 	store = STORE
 	profile_store = PROFILE_STORE
+	application_mode_store = APPLICATION_MODE_STORE
 	ai_usage_store = AI_USAGE_STORE
 	answer_memory = ANSWER_MEMORY
 	cv_profile = CV_PROFILE
@@ -129,6 +131,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 		if parsed.path == "/api/automation":
 			self._send_json({"enabled": self._automation_enabled()})
 			return
+		if parsed.path == "/api/application/mode":
+			self._send_json({"mode": self.application_mode_store.get()})
+			return
 		if parsed.path == "/api/search/status":
 			self._send_json(self.collector.status())
 			return
@@ -182,6 +187,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 					body["automation_enabled"] = self.profile_store.get().automation_enabled
 				profile = UserProfile.model_validate(body)
 				self._send_json(self.profile_store.save(profile).model_dump())
+				return
+			if parsed.path == "/api/application/mode":
+				self._send_json({"mode": self.application_mode_store.set(body.get("mode", ""))})
 				return
 			if parsed.path == "/api/cv":
 				filename = body.get("filename")

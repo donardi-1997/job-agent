@@ -55,6 +55,9 @@ class DeterministicApplicationResult:
     confirmation_text: str = ""
     confirmation_url: str = ""
     steps: int = 0
+    mode: str = "test"
+    test_mode: bool = True
+    ready_to_submit: bool = False
 
     @property
     def terminal_without_ai(self) -> bool:
@@ -254,6 +257,7 @@ class DeterministicApplicationRunner:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self.answer_memory = answer_memory
         self.pattern_store = pattern_store
+        self._mode = "test"
 
     async def apply(
         self,
@@ -262,7 +266,11 @@ class DeterministicApplicationRunner:
         profile: UserProfile,
         saved_draft: dict[str, object],
         max_steps: int = 12,
+        mode: str = "test",
     ) -> DeterministicApplicationResult:
+        if mode not in {"test", "real"}:
+            raise ValueError("mode must be 'test' or 'real'")
+        self._mode = mode
         job_url = str(job.get("url") or "")
         if not is_safe_application_url(job_url):
             return DeterministicApplicationResult(fallback_reason="URL de vacante fuera de la allowlist de Computrabajo.")
@@ -423,6 +431,10 @@ class DeterministicApplicationRunner:
                         application_url=current_url,
                         fallback_reason="No se encontró un siguiente paso seguro y conocido en el formulario.",
                     )
+                if mode == "test" and self._is_final_submission_action(action):
+                    return self._result(observed, questions, step, application_url=current_url,
+                        submission_status="test_ready", mode="test", test_mode=True, ready_to_submit=True,
+                        fallback_reason="Formulario completado en modo prueba. Listo para enviar.")
 
                 fingerprint = f"{current_url}|{action.get('text', '')}|{len(fields)}|{body[:300]}"
                 if fingerprint == previous_fingerprint:
@@ -469,8 +481,15 @@ class DeterministicApplicationRunner:
             questions=tuple(questions.values()),
             observed_fields=tuple(observed.values()),
             steps=steps,
+			mode=str(kwargs.pop("mode", self._mode)),
+			test_mode=bool(kwargs.pop("test_mode", self._mode == "test")),
             **kwargs,
         )
+
+    @staticmethod
+    def _is_final_submission_action(action: dict[str, object]) -> bool:
+        text = normalize_question(_clean(action.get("text")))
+        return any(marker in text for marker in ("postular", "enviar", "confirmar postulacion", "finalizar postulacion", "aplicar"))
 
     def _resolve_answer(self, field: ObservedField, profile: UserProfile, saved_draft: dict[str, object]) -> str | None:
         saved = self._saved_answer(field.question, saved_draft)

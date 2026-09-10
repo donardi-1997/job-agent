@@ -6,6 +6,19 @@ let activeJobId = null;
 let activeDraft = null;
 let loadedProfile = null;
 
+async function loadApplicationMode() {
+	const mode = await fetchJson('/api/application/mode');
+	const panel = document.createElement('section');
+	panel.className = 'search-panel application-mode-panel';
+	panel.innerHTML = '<div class="section-heading"><div><p class="eyebrow">SEGURIDAD</p><h2>MODO DE POSTULACIÓN</h2><p id="applicationModeWarning"></p></div><select id="applicationModeSelect"><option value="test">● Prueba — completar pero NO enviar</option><option value="real">○ Real — completar y enviar</option></select></div>';
+	document.querySelector('#batch').before(panel);
+	const select = panel.querySelector('#applicationModeSelect');
+	select.value = mode.mode;
+	const render = () => { panel.querySelector('#applicationModeWarning').textContent = select.value === 'test' ? 'Modo prueba activo. Los formularios pueden completarse, pero Job Agent no enviará ninguna postulación.' : 'Modo real activo. Las postulaciones pueden enviarse automáticamente.'; };
+	select.addEventListener('change', async () => { await fetchJson('/api/application/mode', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({mode: select.value}) }); render(); });
+	render();
+}
+
 async function fetchJson(url, options = undefined) {
 	const response = await fetch(url, options);
 	const payload = await response.json().catch(() => ({}));
@@ -496,7 +509,7 @@ $('#prepareButton').addEventListener('click', prepareApplication);
 document.querySelectorAll('[data-job-status]').forEach((button) => button.addEventListener('click', () => updateJobStatus(button.dataset.jobStatus)));
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeDrawer(); });
 
-Promise.all([loadDashboard(), loadProfile(), loadBatchHistory()]).then(async () => {
+Promise.all([loadDashboard(), loadProfile(), loadBatchHistory(), loadApplicationMode()]).then(async () => {
 	const search = await fetchJson('/api/search/status').catch(() => null);
 	if (search?.state === 'running') statusPoll = setInterval(pollSearchStatus, 1500);
 	const prep = await fetchJson('/api/prepare/status').catch(() => null);

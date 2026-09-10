@@ -10,6 +10,25 @@ from typing import Iterable
 DEFAULT_DB_PATH = Path("data/job-agent.db")
 ALLOWED_STATUSES = {"discovered", "saved", "applied", "ignored"}
 
+class ApplicationModeStore:
+	"""Persist the local application safety mode."""
+	ALLOWED_MODES = {"test", "real"}
+	def __init__(self, path: Path | str = DEFAULT_DB_PATH) -> None:
+		self.path = Path(path)
+		self.path.parent.mkdir(parents=True, exist_ok=True)
+		with sqlite3.connect(self.path) as connection:
+			connection.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+	def get(self) -> str:
+		with sqlite3.connect(self.path) as connection:
+			row = connection.execute("SELECT value FROM app_settings WHERE key='application_mode'").fetchone()
+		return str(row[0]) if row and row[0] in self.ALLOWED_MODES else "test"
+	def set(self, mode: str) -> str:
+		if mode not in self.ALLOWED_MODES:
+			raise ValueError("mode must be 'test' or 'real'")
+		with sqlite3.connect(self.path) as connection:
+			connection.execute("INSERT INTO app_settings(key,value) VALUES('application_mode',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (mode,))
+		return mode
+
 
 @dataclass(frozen=True)
 class JobRecord:
