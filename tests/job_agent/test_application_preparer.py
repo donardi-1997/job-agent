@@ -37,3 +37,13 @@ def test_application_task_contains_only_supplied_profile_facts_and_saved_answers
 	assert "AWS" in task
 	assert "3" in task
 	assert "Avoid duplicate submission" in task
+
+
+def test_application_task_uses_only_secret_placeholders_for_saved_credentials() -> None:
+	job = {"id": 3, "url": "https://co.computrabajo.com/job-3", "title": "Backend Developer"}
+
+	task = AssistedApplicationPreparer._build_task(job, {}, {}, credentials_available=True)
+
+	assert "<secret>computrabajo_user</secret>" in task
+	assert "<secret>computrabajo_password</secret>" in task
+	assert "Never output their values" in task
