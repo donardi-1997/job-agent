@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,8 @@ STATIC_DIR = Path(__file__).with_name("dashboard_static")
 STORE = JobStore()
 PROFILE_STORE = ProfileStore(STORE.path)
 COLLECTOR = ComputrabajoCollector(store=STORE)
+JOB_DETAIL_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)$")
+JOB_STATUS_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/status$")
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -59,7 +62,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 	def do_GET(self) -> None:  # noqa: N802
 		parsed = urlparse(self.path)
-		static = {"/": ("index.html", "text/html; charset=utf-8"), "/app.css": ("app.css", "text/css; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8")}
+		static = {
+			"/": ("index.html", "text/html; charset=utf-8"),
+			"/app.css": ("app.css", "text/css; charset=utf-8"),
+			"/app.js": ("app.js", "text/javascript; charset=utf-8"),
+		}
 		if parsed.path in static:
 			self._send_static(*static[parsed.path])
 			return
@@ -82,6 +89,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
 			status = query.get("status", [None])[0] or None
 			self._send_json(self.store.list_jobs(min_score=min_score, status=status))
 			return
+
+		match = JOB_DETAIL_RE.match(parsed.path)
+		if match:
+			job = self.store.get_job(int(match.group("job_id")))
+			if not job:
+				self._send_json({"error": "Vacante no encontrada."}, HTTPStatus.NOT_FOUND)
+				return
+			self._send_json(job)
+			return
 		self.send_error(HTTPStatus.NOT_FOUND)
 
 	def do_POST(self) -> None:  # noqa: N802
@@ -100,6 +116,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
 					self._send_json({"error": "Ya hay una búsqueda en ejecución.", "status": self.collector.status()}, HTTPStatus.CONFLICT)
 					return
 				self._send_json(self.collector.status(), HTTPStatus.ACCEPTED)
+				return
+
+			match = JOB_STATUS_RE.match(parsed.path)
+			if match:
+				status = str(body.get("status", ""))
+				job = self.store.update_status(int(match.group("job_id")), status)
+				if not job:
+					self._send_json({"error": "Vacante no encontrada."}, HTTPStatus.NOT_FOUND)
+					return
+				self._send_json(job)
 				return
 		except (ValidationError, ValueError, json.JSONDecodeError) as exc:
 			self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
