@@ -70,9 +70,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 		if not path.exists(): self.send_error(HTTPStatus.NOT_FOUND); return
 		body = path.read_bytes()
 		if filename == "app.js":
-			cost_widget = STATIC_DIR / "costs.js"
-			if cost_widget.exists():
-				body += b"\n\n" + cost_widget.read_bytes()
+			for extra_name in ("costs.js", "automation_control.js"):
+				extra = STATIC_DIR / extra_name
+				if extra.exists(): body += b"\n\n" + extra.read_bytes()
 		self.send_response(HTTPStatus.OK)
 		self.send_header("Content-Type", content_type)
 		self.send_header("Content-Length", str(len(body)))
@@ -80,6 +80,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 	def _automation_busy(self) -> bool:
 		return self.batch_runner.status()["state"] in {"searching", "applying"}
+
+	def _automation_enabled(self) -> bool:
+		return self.profile_store.get().automation_enabled
 
 	def do_GET(self) -> None:  # noqa: N802
 		parsed = urlparse(self.path)
@@ -89,12 +92,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
 			"/application.css": ("application.css", "text/css; charset=utf-8"),
 			"/app.js": ("app.js", "text/javascript; charset=utf-8"),
 			"/costs.js": ("costs.js", "text/javascript; charset=utf-8"),
+			"/automation_control.js": ("automation_control.js", "text/javascript; charset=utf-8"),
 		}
 		if parsed.path in static: self._send_static(*static[parsed.path]); return
 		if parsed.path == "/api/stats": self._send_json(self.store.stats()); return
 		if parsed.path == "/api/ai/usage":
 			payload = self.ai_usage_store.summary(); payload["answer_memory"] = self.answer_memory.stats(); self._send_json(payload); return
 		if parsed.path == "/api/profile": self._send_json(self.profile_store.get().model_dump()); return
+		if parsed.path == "/api/automation": self._send_json({"enabled": self._automation_enabled()}); return
 		if parsed.path == "/api/search/status": self._send_json(self.collector.status()); return
 		if parsed.path == "/api/prepare/status": self._send_json(self.preparer.status()); return
 		if parsed.path == "/api/batch/status": self._send_json(self.batch_runner.status()); return
@@ -124,8 +129,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
 		try:
 			body = self._read_json()
 			if parsed.path == "/api/profile":
+				# The master automation switch has its own endpoint; profile edits must not reset it.
+				if "automation_enabled" not in body:
+					body["automation_enabled"] = self.profile_store.get().automation_enabled
 				profile = UserProfile.model_validate(body); self._send_json(self.profile_store.save(profile).model_dump()); return
+			if parsed.path == "/api/automation":
+				enabled = body.get("enabled")
+				if not isinstance(enabled, bool):
+					self._send_json({"error": "enabled must be a boolean"}, HTTPStatus.BAD_REQUEST); return
+				profile = self.profile_store.get().model_copy(update={"automation_enabled": enabled})
+				self.profile_store.save(profile)
+				self._send_json({"enabled": enabled, "message": "Automatización activada." if enabled else "Automatización pausada. Las búsquedas manuales siguen disponibles."})
+				return
 			if parsed.path == "/api/batch":
+				if not self._automation_enabled():
+					self._send_json({"error": "La automatización está desactivada. Actívala para ejecutar lotes de auto-postulación."}, HTTPStatus.CONFLICT); return
 				if self.collector.status()["state"] == "running" or self.preparer.status()["state"] == "running":
 					self._send_json({"error": "Hay otra operación de navegador en ejecución."}, HTTPStatus.CONFLICT); return
 				request = BatchApplyRequest.model_validate(body)
@@ -151,6 +169,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 				self._send_json(self.store.save_application_draft(job_id, draft.model_dump())); return
 			match = JOB_PREPARE_RE.match(parsed.path)
 			if match:
+				if not self._automation_enabled():
+					self._send_json({"error": "La automatización está desactivada. Actívala antes de postular automáticamente."}, HTTPStatus.CONFLICT); return
 				if self._automation_busy() or self.collector.status()["state"] == "running": self._send_json({"error": "Hay otra operación de navegador en ejecución."}, HTTPStatus.CONFLICT); return
 				job_id = int(match.group("job_id")); job = self.store.get_job(job_id)
 				if not job: self._send_json({"error": "Vacante no encontrada."}, HTTPStatus.NOT_FOUND); return
