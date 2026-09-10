@@ -32,6 +32,7 @@ class SearchRequest(BaseModel):
 	keyword: str = Field(min_length=2, max_length=120)
 	location: str = Field(default="Colombia", min_length=2, max_length=120)
 	max_results: int = Field(default=20, ge=1, le=50)
+	allow_ai_fallback: bool = False
 
 	@field_validator("keyword", "location")
 	@classmethod
@@ -201,9 +202,10 @@ class ComputrabajoCollector:
 			fallback_reason = f"{type(exc).__name__}: {exc}"
 
 		self._last_fallback_reason = fallback_reason
-		# Search AI is opt-in. Missing one search term is cheaper and safer than a
-		# runaway browser agent; the batch continues with the next deterministic term.
-		fallback_enabled = os.getenv("JOB_AGENT_SEARCH_AI_FALLBACK", "0").strip().casefold() not in {"0", "false", "no", "off"}
+		# Search AI is opt-in per request, with an environment override retained for
+		# unattended/manual power users. The batch never opts in by default.
+		env_fallback = os.getenv("JOB_AGENT_SEARCH_AI_FALLBACK", "0").strip().casefold() not in {"0", "false", "no", "off"}
+		fallback_enabled = request.allow_ai_fallback or env_fallback
 		if not fallback_enabled:
 			raise RuntimeError(f"Búsqueda local sin resultados y fallback de IA desactivado. {fallback_reason}")
 		if not os.getenv("BROWSER_USE_API_KEY"):
