@@ -69,6 +69,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 		static = {
 			"/": ("index.html", "text/html; charset=utf-8"),
 			"/app.css": ("app.css", "text/css; charset=utf-8"),
+			"/application.css": ("application.css", "text/css; charset=utf-8"),
 			"/app.js": ("app.js", "text/javascript; charset=utf-8"),
 		}
 		if parsed.path in static:
@@ -127,6 +128,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 				self._send_json(self.profile_store.save(profile).model_dump())
 				return
 			if parsed.path == "/api/search":
+				if self.preparer.status()["state"] == "running":
+					self._send_json({"error": "Hay una postulación en preparación. Espera a que termine antes de buscar."}, HTTPStatus.CONFLICT)
+					return
 				request = SearchRequest.model_validate(body)
 				if not self.collector.start(request):
 					self._send_json({"error": "Ya hay una búsqueda en ejecución.", "status": self.collector.status()}, HTTPStatus.CONFLICT)
@@ -146,6 +150,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 			match = JOB_PREPARE_RE.match(parsed.path)
 			if match:
+				if self.collector.status()["state"] == "running":
+					self._send_json({"error": "Hay una búsqueda en ejecución. Espera a que termine antes de preparar la postulación."}, HTTPStatus.CONFLICT)
+					return
 				job_id = int(match.group("job_id"))
 				if not self.preparer.start(job_id):
 					self._send_json({"error": "Ya hay una preparación en ejecución.", "status": self.preparer.status()}, HTTPStatus.CONFLICT)
