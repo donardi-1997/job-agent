@@ -4,9 +4,14 @@ import json
 import re
 import sqlite3
 import unicodedata
-from difflib import SequenceMatcher
 from pathlib import Path
 
+from job_agent.computrabajo.semantic_answers import (
+    LocalSemanticAnswer,
+    LocalSemanticAnswerEngine,
+    classify_question,
+    semantic_similarity,
+)
 from job_agent.profile import UserProfile
 from job_agent.storage import DEFAULT_DB_PATH
 
@@ -19,11 +24,25 @@ def normalize_question(value: str) -> str:
 
 
 class AnswerMemory:
-    """Single-user local memory for answers that have already been used successfully."""
+    """Single-user local semantic memory for successfully used answers."""
+
+    _LOW_RISK_INTENTS = {
+        "city",
+        "english_level",
+        "salary",
+        "availability",
+        "total_experience_years",
+        "work_mode",
+        "contract_type",
+        "professional_summary",
+        "motivation",
+        "strengths",
+    }
 
     def __init__(self, path: Path | str = DEFAULT_DB_PATH) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.semantic_engine = LocalSemanticAnswerEngine(self.path)
         with self._connect() as connection:
             connection.executescript(
                 """
@@ -79,7 +98,6 @@ class AnswerMemory:
             )
 
     def forget(self, question: str) -> bool:
-        """Remove one exact learned/manual answer from local memory."""
         normalized = normalize_question(question)
         if not normalized:
             return False
@@ -104,7 +122,7 @@ class AnswerMemory:
                 count += 1
         return count
 
-    def _rows(self, limit: int = 200, *, source: str | None = None) -> list[dict[str, object]]:
+    def _rows(self, limit: int = 300, *, source: str | None = None) -> list[dict[str, object]]:
         query = """
             SELECT question_normalized, question, answer, source, confidence, use_count, last_used_at
             FROM answer_memory
@@ -113,70 +131,157 @@ class AnswerMemory:
         if source is not None:
             query += " WHERE source = ?"
             params.append(source)
-        query += " ORDER BY use_count DESC, last_used_at DESC LIMIT ?"
+        query += " ORDER BY use_count DESC, confidence DESC, last_used_at DESC LIMIT ?"
         params.append(limit)
         with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
-    @staticmethod
-    def _match_candidates(normalized: str, candidates: list[tuple[str, str]]) -> str | None:
-        for candidate, answer in candidates:
-            if candidate == normalized:
-                return answer
-        for candidate, answer in candidates:
-            if candidate and SequenceMatcher(None, candidate, normalized).ratio() >= 0.90:
-                return answer
-        return None
+    @classmethod
+    def _similarity_threshold(cls, question: str) -> float:
+        intent = classify_question(question).intent
+        return 0.86 if intent in cls._LOW_RISK_INTENTS else 0.91
 
-    def resolve(self, question: str, profile: UserProfile) -> str | None:
-        """Resolve a known answer without an LLM. Explicit manual overrides have highest priority."""
+    @classmethod
+    def _best_candidate(
+        cls,
+        question: str,
+        candidates: list[dict[str, object]],
+    ) -> tuple[dict[str, object], float] | None:
         normalized = normalize_question(question)
-        if not normalized:
+        for row in candidates:
+            if str(row.get("question_normalized") or "") == normalized:
+                return row, 1.0
+
+        best: tuple[dict[str, object], float] | None = None
+        for row in candidates:
+            candidate_question = str(row.get("question") or "")
+            if not candidate_question:
+                continue
+            score = semantic_similarity(question, candidate_question)
+            if best is None or score > best[1]:
+                best = (row, score)
+
+        threshold = cls._similarity_threshold(question)
+        return best if best is not None and best[1] >= threshold else None
+
+    def _memory_resolution(
+        self,
+        question: str,
+        profile: UserProfile,
+        candidates: list[dict[str, object]],
+        *,
+        source: str,
+        field_type: str,
+        options: tuple[str, ...],
+    ) -> LocalSemanticAnswer | None:
+        matched = self._best_candidate(question, candidates)
+        if matched is None:
+            return None
+        row, similarity = matched
+        raw = str(row.get("answer") or "").strip()
+        if not raw:
+            return None
+        semantic_match = classify_question(
+            question,
+            known_locations=[profile.city, *profile.preferred_locations],
+        )
+        answer = self.semantic_engine.adapt_to_options(
+            raw,
+            options=options,
+            intent=semantic_match.intent,
+            match=semantic_match,
+        )
+        if answer is None:
+            return None
+        stored_confidence = int(row.get("confidence") or 100)
+        confidence = min(stored_confidence, max(90, round(similarity * 100)))
+        return LocalSemanticAnswer(
+            answer=answer,
+            confidence=confidence,
+            source=source,
+            intent=semantic_match.intent,
+            reason=(
+                "Coincidencia exacta en memoria local."
+                if similarity == 1.0
+                else f"Pregunta equivalente reconocida localmente ({similarity:.2f})."
+            ),
+        )
+
+    def resolve_context(
+        self,
+        question: str,
+        profile: UserProfile,
+        *,
+        field_type: str = "text",
+        options: tuple[str, ...] = (),
+        job: dict[str, object] | None = None,
+    ) -> LocalSemanticAnswer | None:
+        """Resolve with semantic intent, option mapping and evidence provenance."""
+        if not normalize_question(question):
             return None
 
-        manual_candidates = [
-            (str(row["question_normalized"]), str(row["answer"]))
-            for row in self._rows(source="manual")
-        ]
-        manual = self._match_candidates(normalized, manual_candidates)
+        manual = self._memory_resolution(
+            question,
+            profile,
+            self._rows(source="manual"),
+            source="manual",
+            field_type=field_type,
+            options=options,
+        )
         if manual:
             return manual
 
-        direct_profile = self._profile_answer(normalized, profile)
-        if direct_profile:
-            return direct_profile
+        direct = self.semantic_engine.resolve_profile(
+            question,
+            profile,
+            field_type=field_type,
+            options=options,
+            job=job,
+        )
+        if direct:
+            return direct
 
         profile_candidates = [
-            (normalize_question(item.question), item.answer)
+            {
+                "question_normalized": normalize_question(item.question),
+                "question": item.question,
+                "answer": item.answer,
+                "source": "profile",
+                "confidence": 100,
+            }
             for item in profile.frequent_answers
         ]
-        profile_answer = self._match_candidates(normalized, profile_candidates)
-        if profile_answer:
-            return profile_answer
+        frequent = self._memory_resolution(
+            question,
+            profile,
+            profile_candidates,
+            source="profile",
+            field_type=field_type,
+            options=options,
+        )
+        if frequent:
+            return frequent
 
-        learned_candidates = [
-            (str(row["question_normalized"]), str(row["answer"]))
+        learned = [
+            row
             for row in self._rows()
             if str(row.get("source") or "") != "manual"
         ]
-        return self._match_candidates(normalized, learned_candidates)
-
-    @staticmethod
-    def _profile_answer(normalized: str, profile: UserProfile) -> str | None:
-        rules: tuple[tuple[tuple[str, ...], str], ...] = (
-            (("ciudad", "residencia"), profile.city),
-            (("nivel de ingles", "ingles"), profile.english_level),
-            (("aspiracion salarial", "pretension salarial", "salario esperado"), profile.salary_expectation),
-            (("disponibilidad", "cuando puedes empezar"), profile.availability),
+        return self._memory_resolution(
+            question,
+            profile,
+            learned,
+            source="learned",
+            field_type=field_type,
+            options=options,
         )
-        for needles, answer in rules:
-            if answer and any(needle in normalized for needle in needles):
-                return answer
-        return None
+
+    def resolve(self, question: str, profile: UserProfile) -> str | None:
+        result = self.resolve_context(question, profile)
+        return result.answer if result else None
 
     def context_for_agent(self, profile: UserProfile, limit: int = 80) -> list[dict[str, str]]:
-        """Return compact deterministic answers; explicit manual adjustments win over all other sources."""
         context: list[dict[str, str]] = []
         seen: set[str] = set()
 
@@ -216,8 +321,9 @@ class AnswerMemory:
             row = connection.execute(
                 "SELECT COUNT(*) AS answers, COALESCE(SUM(use_count), 0) AS uses FROM answer_memory"
             ).fetchone()
-            memory_rows = connection.execute("SELECT question_normalized FROM answer_memory").fetchall()
-            memory_questions = {str(item["question_normalized"]) for item in memory_rows}
+            memory_rows = connection.execute(
+                "SELECT question_normalized, question FROM answer_memory"
+            ).fetchall()
             attempts_table = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='application_attempts'"
             ).fetchone()
@@ -227,7 +333,7 @@ class AnswerMemory:
                 else []
             )
 
-        encountered: set[str] = set()
+        encountered: dict[str, str] = {}
         submitted_applications = 0
         for attempt in attempt_rows:
             if bool(attempt["submitted"]):
@@ -244,11 +350,24 @@ class AnswerMemory:
             for item in questions:
                 if not isinstance(item, dict):
                     continue
-                normalized = normalize_question(str(item.get("question") or ""))
+                question = str(item.get("question") or "").strip()
+                normalized = normalize_question(question)
                 if normalized:
-                    encountered.add(normalized)
+                    encountered[normalized] = question
 
-        learned_encountered = len(encountered & memory_questions)
+        memory_questions = [
+            (str(item["question_normalized"]), str(item["question"]))
+            for item in memory_rows
+        ]
+        learned_encountered = 0
+        for normalized, original in encountered.items():
+            if any(key == normalized for key, _ in memory_questions):
+                learned_encountered += 1
+                continue
+            threshold = self._similarity_threshold(original)
+            if any(semantic_similarity(original, candidate) >= threshold for _, candidate in memory_questions):
+                learned_encountered += 1
+
         coverage = round((learned_encountered / len(encountered) * 100), 1) if encountered else 0.0
         return {
             "answers": int(row["answers"]),
