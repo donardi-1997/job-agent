@@ -9,7 +9,6 @@ on:
       - 'tests/job_agent/**'
       - 'run_job_agent.py'
       - 'pyproject.toml'
-      - 'uv.lock'
       - '.github/workflows/job-agent-ci.yml'
   push:
     branches:
@@ -20,7 +19,6 @@ on:
       - 'tests/job_agent/**'
       - 'run_job_agent.py'
       - 'pyproject.toml'
-      - 'uv.lock'
       - '.github/workflows/job-agent-ci.yml'
 
 permissions:
@@ -55,7 +53,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Sync dependencies
-        run: uv sync --dev --extra core --python 3.12 --frozen
+        run: uv sync --dev --extra core --python 3.12
 
       - name: Compile Job Agent
         run: uv run --no-sync python -m compileall -q job_agent run_job_agent.py
