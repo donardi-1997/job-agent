@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from browser_use import ChatBrowserUse
 
 from job_agent.storage import DEFAULT_DB_PATH
 
+
+logger = logging.getLogger(__name__)
 
 # Browser Use token pricing in USD per million tokens for concrete models.
 # Aliases are resolved before pricing so bu-latest cannot silently use an old table.
@@ -111,9 +114,10 @@ class MeteredChatBrowserUse(ChatBrowserUse):
                     callback_result = self._on_usage(delta)
                     if inspect.isawaitable(callback_result):
                         await callback_result
-                except Exception:
-                    # Telemetry must never break browser automation.
-                    pass
+                except Exception as exc:
+                    # Telemetry must never break browser automation, but failures must
+                    # be visible so real spend cannot disappear silently.
+                    logger.warning("Could not persist Browser Use usage event: %s", exc)
         return completion
 
     def snapshot(self) -> UsageSnapshot:
@@ -173,7 +177,8 @@ class AIUsageStore:
             )
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, timeout=10.0)
+        connection.execute("PRAGMA busy_timeout = 10000")
         connection.row_factory = sqlite3.Row
         return connection
 
@@ -220,7 +225,8 @@ class AIUsageStore:
         """Best-effort telemetry: usage logging must never break the user workflow."""
         try:
             return self.record(operation, snapshot, job_id=job_id, metadata=metadata)
-        except Exception:
+        except Exception as exc:
+            logger.warning("AI usage telemetry write failed: %s", exc)
             return None
 
     def summary(self) -> dict[str, object]:
