@@ -30,6 +30,7 @@ class UserProfile(BaseModel):
 	remote_ok: bool = True
 	min_score: int = Field(default=60, ge=0, le=100)
 	prepare_application_score: int = Field(default=85, ge=0, le=100)
+	min_monthly_salary_cop: int = Field(default=4_000_000, ge=0, le=100_000_000)
 	excluded_terms: list[str] = Field(default_factory=lambda: ["english c1", "inglés c1"])
 	automation_enabled: bool = True
 
@@ -110,6 +111,7 @@ class UserProfile(BaseModel):
 			remote_ok=self.remote_ok,
 			min_score=self.min_score,
 			prepare_application_score=self.prepare_application_score,
+			min_monthly_salary_cop=self.min_monthly_salary_cop,
 			excluded_terms=tuple(self.excluded_terms),
 			auto_submit=self.automation_enabled,
 		)
