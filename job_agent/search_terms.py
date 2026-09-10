@@ -67,15 +67,16 @@ def build_personal_search_terms(profile: UserProfile, *, custom_term: str = "", 
 	"""Build the personal automatic search plan from skills plus explicit roles.
 
 	Skill-derived terms come first because they adapt automatically when the CV or
-	profile skills change. Explicit target roles are then retained as durable user
-	preferences, followed by one optional manual term.
+	profile skills change. Explicit target roles are retained as durable user
+	preferences. When a manual term is supplied, one slot is reserved for it so a
+	full automatic plan never silently drops an explicit user request.
 	"""
 	if limit <= 0:
 		return []
 
+	custom = " ".join(custom_term.strip().split())
+	auto_limit = max(0, limit - 1) if custom else limit
 	values = [*derive_skill_search_terms(profile, limit=limit), *profile.target_roles]
-	if custom_term.strip():
-		values.append(custom_term)
 
 	result: list[str] = []
 	seen: set[str] = set()
@@ -85,6 +86,13 @@ def build_personal_search_terms(profile: UserProfile, *, custom_term: str = "", 
 		if value and key not in seen:
 			seen.add(key)
 			result.append(value)
-		if len(result) >= limit:
+		if len(result) >= auto_limit:
 			break
-	return result
+
+	if custom and custom.casefold() not in seen:
+		result.append(custom)
+	elif custom and len(result) < limit:
+		# It was already present in the automatic plan; no duplicate is needed.
+		pass
+
+	return result[:limit]
