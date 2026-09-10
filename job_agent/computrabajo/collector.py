@@ -23,6 +23,7 @@ from job_agent.storage import JobRecord, JobStore
 COMPUTRABAJO_URL = "https://co.computrabajo.com/"
 DEFAULT_PROFILE_DIR = Path("data/browser-profile")
 DEFAULT_BROWSER_MODEL = "bu-latest"
+DEFAULT_SEARCH_AI_MAX_STEPS = 20
 
 
 class SearchRequest(BaseModel):
@@ -64,7 +65,7 @@ class SearchRunStatus(BaseModel):
 
 
 class ComputrabajoCollector:
-	"""Discover vacancies locally first, using an LLM only as a fallback."""
+	"""Discover vacancies locally first, using an LLM only as a bounded fallback."""
 
 	def __init__(self, store: JobStore | None = None, profile_dir: Path | str = DEFAULT_PROFILE_DIR) -> None:
 		self.store = store or JobStore()
@@ -209,6 +210,14 @@ class ComputrabajoCollector:
 		self._record_search_execution(request, "ai_fallback", len(output.jobs), fallback_reason)
 		return output
 
+	@staticmethod
+	def _search_ai_max_steps() -> int:
+		raw = os.getenv("JOB_AGENT_SEARCH_AI_MAX_STEPS", str(DEFAULT_SEARCH_AI_MAX_STEPS))
+		try:
+			return max(8, min(40, int(raw)))
+		except ValueError:
+			return DEFAULT_SEARCH_AI_MAX_STEPS
+
 	async def _collect_with_ai(self, request: SearchRequest) -> SearchOutput:
 		browser = Browser(
 			user_data_dir=str(self.profile_dir.resolve()),
@@ -238,14 +247,17 @@ class ComputrabajoCollector:
 				llm=llm,
 				browser=browser,
 				output_model_schema=SearchOutput,
-				use_vision="auto",
+				# Discovery is text/DOM extraction. Disabling vision avoids expensive
+				# screenshot capture and the ScreenshotWatchdog timeouts seen on long lists.
+				use_vision=False,
 				extend_system_message=(
-					"This is read-only job discovery. Never apply, submit a form, change account data, send messages, "
-					"or bypass CAPTCHA, 2FA, bot detection, or access controls. Stop if such a challenge blocks discovery. "
-					"Google OAuth navigation is allowed only when needed for the user's Computrabajo login; do not alter the Google account."
+					"This is read-only job discovery on Computrabajo only. Do not navigate to Google, Bing, or any external "
+					"search engine/site. Never apply, submit a form, change account data, send messages, or bypass CAPTCHA, "
+					"2FA, bot detection, or access controls. Stop if such a challenge blocks discovery. Use only pages under "
+					"the configured Computrabajo allowlist."
 				),
 			)
-			history = await agent.run(max_steps=60)
+			history = await agent.run(max_steps=self._search_ai_max_steps())
 			output = history.structured_output
 			if output is None:
 				raise RuntimeError(f"Browser Use no devolvió vacantes estructuradas. Resultado: {(history.final_result() or '')[:300]}")
@@ -263,6 +275,7 @@ Location: {request.location!r}
 Collect up to {request.max_results} distinct, recent and relevant jobs.
 Return exact title, company, displayed location, useful description/requirements summary, and canonical Computrabajo vacancy URL.
 Open vacancy pages only when needed for enough description to score the job later; avoid unnecessary navigation.
+Use Computrabajo only. Do not navigate to Google, Bing, or another external search engine or website.
 Do not apply, do not click any final application/submission button, do not modify the account, and do not send messages.
 If CAPTCHA, 2FA, or anti-bot protection blocks the task, stop instead of bypassing it.
 Return only actual vacancies on co.computrabajo.com.
