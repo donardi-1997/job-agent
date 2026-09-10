@@ -1,5 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 let statusPoll = null;
+let preparePoll = null;
 let activeJobId = null;
 
 async function fetchJson(url, options = undefined) {
@@ -41,6 +42,46 @@ function chips(items, emptyText) {
 	return items.map((item) => `<span class="skill-chip">${escapeHtml(item)}</span>`).join('');
 }
 
+function renderDraft(draft) {
+	const box = $('#draftBox');
+	const questions = draft.questions || [];
+	box.classList.remove('hidden');
+	$('#draftSummary').innerHTML = `<strong>${escapeHtml(draft.summary || 'Borrador preparado')}</strong>${draft.blocked_reason ? `<span class="draft-warning">${escapeHtml(draft.blocked_reason)}</span>` : ''}`;
+	$('#draftQuestions').innerHTML = questions.length ? questions.map((item, index) => {
+		const options = item.options?.length ? `<div class="draft-options">Opciones: ${item.options.map(escapeHtml).join(' · ')}</div>` : '';
+		const answer = item.suggested_answer ? escapeHtml(item.suggested_answer) : 'Necesita tu respuesta';
+		const state = item.requires_user_input ? 'needs-input' : 'ready';
+		return `<article class="draft-question ${state}"><div class="question-top"><span>#${index + 1}</span><strong>${escapeHtml(item.question)}</strong><em>${escapeHtml(item.confidence)}%</em></div>${options}<div class="suggested-answer"><small>Respuesta sugerida</small><p>${answer}</p></div>${item.note ? `<p class="draft-note">${escapeHtml(item.note)}</p>` : ''}<span class="answer-state">${item.requires_user_input ? 'Requiere revisión' : 'Lista para revisar'}</span></article>`;
+	}).join('') : '<p class="empty-chip">No se detectaron preguntas visibles en el flujo.</p>';
+}
+
+function renderPrepareStatus(status) {
+	const box = $('#prepareStatus');
+	const button = $('#prepareButton');
+	box.dataset.state = status.state || 'idle';
+	const runningForThisJob = status.state === 'running' && status.job_id === activeJobId;
+	button.disabled = status.state === 'running';
+	button.textContent = runningForThisJob ? 'Preparando…' : 'Preparar postulación';
+	const titles = { idle: 'Sin borrador', running: 'Preparando postulación', completed: 'Borrador preparado', error: 'La preparación necesita atención' };
+	$('#prepareStatusTitle').textContent = titles[status.state] || 'Estado de preparación';
+	$('#prepareStatusMessage').textContent = status.message || 'Puedes preparar la postulación cuando quieras.';
+}
+
+async function loadDraft(jobId) {
+	try {
+		const draft = await fetchJson(`/api/jobs/${jobId}/draft`);
+		if (activeJobId === jobId) {
+			renderDraft(draft);
+			renderPrepareStatus({ state: 'completed', job_id: jobId, message: `Borrador guardado · ${draft.questions?.length || 0} preguntas/campos.` });
+		}
+	} catch (_) {
+		if (activeJobId === jobId) {
+			$('#draftBox').classList.add('hidden');
+			renderPrepareStatus({ state: 'idle', job_id: jobId, message: 'Puedes preparar la postulación cuando quieras.' });
+		}
+	}
+}
+
 async function openJob(jobId) {
 	try {
 		const job = await fetchJson(`/api/jobs/${jobId}`);
@@ -58,6 +99,7 @@ async function openJob(jobId) {
 		$('#drawerBackdrop').classList.add('open');
 		$('#jobDrawer').setAttribute('aria-hidden', 'false');
 		document.body.classList.add('drawer-open');
+		await loadDraft(jobId);
 	} catch (error) { console.error('Unable to open job detail', error); }
 }
 
@@ -76,6 +118,30 @@ async function updateJobStatus(status) {
 		await loadDashboard();
 		closeDrawer();
 	} catch (error) { console.error('Unable to update job status', error); }
+}
+
+async function pollPrepareStatus() {
+	try {
+		const status = await fetchJson('/api/prepare/status');
+		if (activeJobId === status.job_id) renderPrepareStatus(status);
+		if (status.state !== 'running') {
+			if (preparePoll) clearInterval(preparePoll);
+			preparePoll = null;
+			if (status.state === 'completed' && status.job_id) await loadDraft(status.job_id);
+		}
+	} catch (error) { console.error('Unable to poll preparation status', error); }
+}
+
+async function prepareApplication() {
+	if (!activeJobId) return;
+	const jobId = activeJobId;
+	$('#draftBox').classList.add('hidden');
+	try {
+		const status = await fetchJson(`/api/jobs/${jobId}/prepare`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+		renderPrepareStatus(status);
+		if (preparePoll) clearInterval(preparePoll);
+		preparePoll = setInterval(pollPrepareStatus, 1500);
+	} catch (error) { renderPrepareStatus({ state: 'error', job_id: jobId, message: error.message }); }
 }
 
 function renderSearchStatus(status) {
@@ -137,7 +203,13 @@ $('#focusSearchButton').addEventListener('click', () => { $('#search').scrollInt
 $('#searchForm').addEventListener('submit', startSearch); $('#profileForm').addEventListener('submit', saveProfile);
 $('#scoreFilter').addEventListener('change', loadDashboard); $('#statusFilter').addEventListener('change', loadDashboard);
 $('#drawerClose').addEventListener('click', closeDrawer); $('#drawerBackdrop').addEventListener('click', closeDrawer);
+$('#prepareButton').addEventListener('click', prepareApplication);
 document.querySelectorAll('[data-job-status]').forEach((button) => button.addEventListener('click', () => updateJobStatus(button.dataset.jobStatus)));
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeDrawer(); });
 
-Promise.all([loadDashboard(), loadProfile()]).then(async () => { const status = await fetchJson('/api/search/status').catch(() => null); if (status?.state === 'running') statusPoll = setInterval(pollSearchStatus, 1500); });
+Promise.all([loadDashboard(), loadProfile()]).then(async () => {
+	const searchStatus = await fetchJson('/api/search/status').catch(() => null);
+	if (searchStatus?.state === 'running') statusPoll = setInterval(pollSearchStatus, 1500);
+	const preparationStatus = await fetchJson('/api/prepare/status').catch(() => null);
+	if (preparationStatus?.state === 'running') preparePoll = setInterval(pollPrepareStatus, 1500);
+});
