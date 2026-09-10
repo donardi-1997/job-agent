@@ -29,10 +29,27 @@ def _normalize(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "").casefold()).strip()
 
 
-def invalid_computrabajo_job_reason(*, title: object, url: object, description: object = "") -> str:
-    """Return why a record cannot be considered a real Computrabajo vacancy.
+def is_error_page_record(*, title: object, description: object = "") -> bool:
+    normalized_title = _normalize(title)
+    if any(marker == normalized_title or normalized_title.startswith(f"{marker} ") for marker in _ERROR_TITLE_MARKERS):
+        return True
 
-    This is intentionally strict: discovery records must point to the canonical
+    normalized_description = _normalize(description)
+    # Only treat short content beginning with an access/browser error as an
+    # error page. A legitimate long job description may mention an HTTP code.
+    return bool(
+        normalized_description
+        and len(normalized_description) < 500
+        and normalized_description.startswith(
+            ("403 forbidden", "access denied", "acceso denegado", "err_too_many_redirects")
+        )
+    )
+
+
+def invalid_computrabajo_job_reason(*, title: object, url: object, description: object = "") -> str:
+    """Return why a new record cannot be considered a real Computrabajo vacancy.
+
+    New discovery is intentionally strict: records must point to the canonical
     public vacancy route and must not represent browser/server error pages.
     """
     raw_url = str(url or "").strip()
@@ -45,15 +62,8 @@ def invalid_computrabajo_job_reason(*, title: object, url: object, description: 
     normalized_title = _normalize(title)
     if not normalized_title:
         return "La vacante no tiene título."
-    if any(marker == normalized_title or normalized_title.startswith(f"{marker} ") for marker in _ERROR_TITLE_MARKERS):
-        return f"Título de página de error detectado: {str(title or '').strip()}"
-
-    normalized_description = _normalize(description)
-    # Only reject description text when it is clearly the whole error page. Do
-    # not reject legitimate job descriptions that merely mention an HTTP code.
-    if normalized_description and len(normalized_description) < 500:
-        if normalized_description.startswith(("403 forbidden", "access denied", "acceso denegado", "err_too_many_redirects")):
-            return "Contenido de página de error detectado en la descripción."
+    if is_error_page_record(title=title, description=description):
+        return f"Página de error detectada: {str(title or '').strip() or 'sin título'}"
     return ""
 
 
@@ -62,10 +72,11 @@ def is_valid_computrabajo_job(*, title: object, url: object, description: object
 
 
 def purge_invalid_computrabajo_jobs(path: Path | str = DEFAULT_DB_PATH) -> int:
-    """Delete historical error-page records and their local child data.
+    """Delete only obvious historical error-page records and their child data.
 
-    We explicitly clean child tables because SQLite foreign key cascades are not
-    guaranteed to be enabled on every existing local connection.
+    Cleanup is deliberately narrower than new-record validation so an older
+    legitimate vacancy using a historical URL format is never deleted merely
+    because its route differs from the current canonical format.
     """
     db_path = Path(path)
     if not db_path.exists():
@@ -80,16 +91,12 @@ def purge_invalid_computrabajo_jobs(path: Path | str = DEFAULT_DB_PATH) -> int:
         if "jobs" not in existing_tables:
             return 0
         rows = connection.execute(
-            "SELECT id, title, url, description FROM jobs WHERE source = 'computrabajo'"
+            "SELECT id, title, description FROM jobs WHERE source = 'computrabajo'"
         ).fetchall()
         invalid_ids = [
             int(row["id"])
             for row in rows
-            if not is_valid_computrabajo_job(
-                title=row["title"],
-                url=row["url"],
-                description=row["description"],
-            )
+            if is_error_page_record(title=row["title"], description=row["description"])
         ]
         if not invalid_ids:
             return 0
