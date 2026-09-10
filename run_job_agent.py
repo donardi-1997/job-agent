@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from job_agent.enhanced_dashboard import run_dashboard
+from job_agent.computrabajo.job_validation import purge_invalid_computrabajo_jobs
 
 
 def main() -> None:
@@ -11,6 +11,13 @@ def main() -> None:
 	parser.add_argument("--port", default=8765, type=int, help="Dashboard port (default: 8765)")
 	parser.add_argument("--no-browser", action="store_true", help="Do not open the browser automatically")
 	args = parser.parse_args()
+
+	removed = purge_invalid_computrabajo_jobs()
+	if removed:
+		print(f"Job Agent cleaned {removed} invalid Computrabajo error-page record(s).")
+
+	# Import after cleanup so dashboard singletons are created against clean data.
+	from job_agent.enhanced_dashboard import run_dashboard
 
 	run_dashboard(host=args.host, port=args.port, open_browser=not args.no_browser)
 
