@@ -302,6 +302,24 @@ class DeterministicComputrabajoSearch:
     if (types.some((item) => String(item || '').toLowerCase() === 'jobposting')) out.push(value);
     if (Array.isArray(value['@graph'])) flatten(value['@graph'], out);
   };
+  const salaryText = (salary) => {
+    if (!salary) return '';
+    const currency = clean(salary.currency || salary.value?.currency || 'COP');
+    const value = salary.value ?? salary;
+    if (typeof value === 'number' || typeof value === 'string') {
+      return clean(`Salario: ${currency} ${value}`);
+    }
+    if (!value || typeof value !== 'object') return '';
+    const unit = clean(value.unitText || value.unitCode || '');
+    const fixed = value.value;
+    const min = value.minValue;
+    const max = value.maxValue;
+    if (fixed != null) return clean(`Salario: ${currency} ${fixed} ${unit}`);
+    if (min != null && max != null) return clean(`Rango salarial: ${currency} ${min} a ${max} ${unit}`);
+    if (min != null) return clean(`Salario: desde ${currency} ${min} ${unit}`);
+    if (max != null) return clean(`Salario: hasta ${currency} ${max} ${unit}`);
+    return '';
+  };
   const postings = [];
   for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
     try { flatten(JSON.parse(script.textContent || '{}'), postings); } catch (_) {}
@@ -323,12 +341,14 @@ class DeterministicComputrabajoSearch:
   const domCompany = document.querySelector('[itemprop="hiringOrganization"], [class*="company"] a, a[href*="/empresas/"]');
   const domLocation = document.querySelector('[itemprop="jobLocation"], [class*="location"], [class*="place"]');
   const domDescription = document.querySelector('[itemprop="description"], [class*="description"], article');
+  const description = clean(posting?.description ? textFromHtml(posting.description) : (domDescription?.innerText || ''));
+  const salary = salaryText(posting?.baseSalary);
   return {
     url: location.href,
     title: clean(posting?.title || document.querySelector('h1')?.innerText || ''),
     company: clean(companyFromSchema || domCompany?.innerText || ''),
     location: clean(locationParts.join(' · ') || domLocation?.innerText || ''),
-    description: clean(posting?.description ? textFromHtml(posting.description) : (domDescription?.innerText || '')),
+    description: clean([salary, description].filter(Boolean).join(' · ')),
   };
 })()
 """
