@@ -77,6 +77,19 @@ class JobStore:
 					updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 					FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
 				);
+
+				CREATE TABLE IF NOT EXISTS application_attempts (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					job_id INTEGER NOT NULL,
+					payload TEXT NOT NULL,
+					submitted INTEGER NOT NULL DEFAULT 0,
+					submission_status TEXT NOT NULL DEFAULT 'not_submitted',
+					confirmation_text TEXT NOT NULL DEFAULT '',
+					confirmation_url TEXT NOT NULL DEFAULT '',
+					created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+				);
+				CREATE INDEX IF NOT EXISTS idx_application_attempts_job_id ON application_attempts(job_id, created_at DESC);
 				"""
 			)
 
@@ -183,6 +196,44 @@ class JobStore:
 		payload["created_at"] = row["created_at"]
 		payload["updated_at"] = row["updated_at"]
 		return payload
+
+	def save_application_attempt(self, job_id: int, payload: dict[str, object]) -> int:
+		if not self.get_job(job_id):
+			raise ValueError("Vacante no encontrada.")
+		with self.connect() as connection:
+			cursor = connection.execute(
+				"""
+				INSERT INTO application_attempts(
+					job_id, payload, submitted, submission_status, confirmation_text, confirmation_url
+				) VALUES (?, ?, ?, ?, ?, ?)
+				""",
+				(
+					job_id,
+					json.dumps(payload, ensure_ascii=False),
+					1 if payload.get("submitted") else 0,
+					str(payload.get("submission_status") or "not_submitted"),
+					str(payload.get("confirmation_text") or ""),
+					str(payload.get("confirmation_url") or ""),
+				),
+			)
+			return int(cursor.lastrowid)
+
+	def list_application_attempts(self, job_id: int, limit: int = 20) -> list[dict[str, object]]:
+		with self.connect() as connection:
+			rows = connection.execute(
+				"SELECT * FROM application_attempts WHERE job_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+				(job_id, limit),
+			).fetchall()
+		result: list[dict[str, object]] = []
+		for row in rows:
+			item = dict(row)
+			try:
+				item["payload"] = json.loads(str(item["payload"]))
+			except json.JSONDecodeError:
+				item["payload"] = {}
+			item["submitted"] = bool(item["submitted"])
+			result.append(item)
+		return result
 
 	def list_jobs(self, *, limit: int = 100, min_score: int = 0, status: str | None = None) -> list[dict[str, object]]:
 		query = "SELECT * FROM jobs WHERE score >= ?"
