@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import os
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -15,6 +16,13 @@ from job_agent.storage import DEFAULT_DB_PATH
 
 
 logger = logging.getLogger(__name__)
+
+_FALSE_VALUES = {"0", "false", "no", "off"}
+
+
+def _zero_cost_mode() -> bool:
+    return os.getenv("JOB_AGENT_ZERO_COST", "1").strip().casefold() not in _FALSE_VALUES
+
 
 # Browser Use token pricing in USD per million tokens for concrete models.
 # Aliases are resolved before pricing so bu-latest cannot silently use an old table.
@@ -90,10 +98,14 @@ class MeteredChatBrowserUse(ChatBrowserUse):
     Browser Use normalizes aliases such as ``bu-latest`` to ``bu-2-0``. Pricing
     therefore follows the effective model, not the alias originally requested.
 
+    In Job Agent's default zero-cost mode, ``ainvoke`` raises before contacting
+    the provider. This is a defense-in-depth guarantee: even if a caller
+    accidentally constructs this client, no paid request leaves the process.
+
     ``on_usage`` is called immediately after every successful LLM response that
     includes usage. ``usage_budget`` is checked before every invocation, allowing a
     batch to share one hard call/cost budget across search, question resolution and
-    full browser-agent fallbacks.
+    full browser-agent fallbacks when paid mode was explicitly enabled.
     """
 
     def __init__(
@@ -148,6 +160,11 @@ class MeteredChatBrowserUse(ChatBrowserUse):
         )
 
     async def ainvoke(self, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        if _zero_cost_mode():
+            raise AIUsageBudgetExceeded(
+                "Modo ZERO COST activo: la llamada de IA pagada fue bloqueada antes de enviarse."
+            )
+
         if self._usage_budget is not None:
             self._usage_budget.before_call()
 
