@@ -37,7 +37,7 @@ def test_batch_request_validates_limits() -> None:
 		BatchApplyRequest(max_search_terms=13)
 
 
-def test_personal_batch_uses_profile_roles_and_deduplicates_optional_term(tmp_path: Path) -> None:
+def test_personal_batch_uses_skills_roles_and_deduplicates_optional_term(tmp_path: Path) -> None:
 	store = JobStore(tmp_path / "jobs.db")
 	ProfileStore(store.path).save(
 		UserProfile(
@@ -50,23 +50,31 @@ def test_personal_batch_uses_profile_roles_and_deduplicates_optional_term(tmp_pa
 	request = BatchApplyRequest(keyword="backend developer", max_search_terms=8)
 	terms = runner._search_terms(request)
 
-	assert terms == ["Python Developer", "Backend Developer", "AWS Developer", "AI Engineer"]
+	assert "Python Backend Developer" in terms
+	assert "AWS Developer" in terms
+	assert "Cloud Developer" in terms
+	assert "Backend Developer" in terms
+	assert sum(term.casefold() == "backend developer" for term in terms) == 1
+	assert len(terms) <= 8
 
 
 def test_personal_batch_adds_one_optional_custom_search_term(tmp_path: Path) -> None:
 	store = JobStore(tmp_path / "jobs.db")
-	ProfileStore(store.path).save(UserProfile(target_roles=["Python Developer", "Backend Developer"]))
+	ProfileStore(store.path).save(
+		UserProfile(target_roles=["Python Developer", "Backend Developer"], skills=["Python", "FastAPI"])
+	)
 	runner = BatchApplyRunner(store=store)
 
-	terms = runner._search_terms(BatchApplyRequest(keyword="FastAPI Developer"))
+	terms = runner._search_terms(BatchApplyRequest(keyword="Shopify Developer"))
 
-	assert terms == ["Python Developer", "Backend Developer", "FastAPI Developer"]
+	assert "Python Backend Developer" in terms
+	assert terms[-1] == "Shopify Developer"
 
 
 def test_personal_batch_respects_search_term_cap(tmp_path: Path) -> None:
 	store = JobStore(tmp_path / "jobs.db")
 	ProfileStore(store.path).save(
-		UserProfile(target_roles=[f"Role {index}" for index in range(1, 10)])
+		UserProfile(target_roles=[f"Role {index}" for index in range(1, 10)], skills=[])
 	)
 	runner = BatchApplyRunner(store=store)
 
