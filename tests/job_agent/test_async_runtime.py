@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from job_agent.async_runtime import AsyncRuntime
+from job_agent.async_runtime import AsyncRuntime, run_async
 
 
 def test_async_runtime_reuses_one_event_loop() -> None:
@@ -36,3 +36,13 @@ def test_async_runtime_propagates_coroutine_result() -> None:
         assert runtime.run(calculate()) == 42
     finally:
         runtime.shutdown()
+
+
+def test_computrabajo_workers_route_asyncio_run_to_persistent_runtime() -> None:
+    import job_agent.computrabajo.application as application_module
+    import job_agent.computrabajo.batch as batch_module
+    import job_agent.computrabajo.collector as collector_module
+
+    assert application_module.asyncio.run is run_async
+    assert batch_module.asyncio.run is run_async
+    assert collector_module.asyncio.run is run_async
