@@ -90,6 +90,23 @@ class JobStore:
 					FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
 				);
 				CREATE INDEX IF NOT EXISTS idx_application_attempts_job_id ON application_attempts(job_id, created_at DESC);
+
+				CREATE TABLE IF NOT EXISTS batch_runs (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					keyword TEXT NOT NULL,
+					location TEXT NOT NULL,
+					min_score INTEGER NOT NULL,
+					max_applications INTEGER NOT NULL,
+					state TEXT NOT NULL DEFAULT 'running',
+					found INTEGER NOT NULL DEFAULT 0,
+					eligible INTEGER NOT NULL DEFAULT 0,
+					attempted INTEGER NOT NULL DEFAULT 0,
+					submitted INTEGER NOT NULL DEFAULT 0,
+					blocked INTEGER NOT NULL DEFAULT 0,
+					message TEXT NOT NULL DEFAULT '',
+					created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+				);
 				"""
 			)
 
@@ -235,6 +252,44 @@ class JobStore:
 			result.append(item)
 		return result
 
+	def count_submitted_today(self) -> int:
+		with self.connect() as connection:
+			row = connection.execute(
+				"SELECT COUNT(*) FROM application_attempts WHERE submitted = 1 AND date(created_at, 'localtime') = date('now', 'localtime')"
+			).fetchone()
+			return int(row[0]) if row else 0
+
+	def create_batch_run(self, *, keyword: str, location: str, min_score: int, max_applications: int) -> int:
+		with self.connect() as connection:
+			cursor = connection.execute(
+				"INSERT INTO batch_runs(keyword, location, min_score, max_applications) VALUES(?, ?, ?, ?)",
+				(keyword, location, min_score, max_applications),
+			)
+			return int(cursor.lastrowid)
+
+	def update_batch_run(self, run_id: int, **values: object) -> None:
+		allowed = {"state", "found", "eligible", "attempted", "submitted", "blocked", "message"}
+		parts: list[str] = []
+		params: list[object] = []
+		for key, value in values.items():
+			if key in allowed:
+				parts.append(f"{key} = ?")
+				params.append(value)
+		if not parts:
+			return
+		parts.append("updated_at = CURRENT_TIMESTAMP")
+		params.append(run_id)
+		with self.connect() as connection:
+			connection.execute(f"UPDATE batch_runs SET {', '.join(parts)} WHERE id = ?", params)
+
+	def list_batch_runs(self, limit: int = 20) -> list[dict[str, object]]:
+		with self.connect() as connection:
+			rows = connection.execute(
+				"SELECT * FROM batch_runs ORDER BY created_at DESC, id DESC LIMIT ?",
+				(limit,),
+			).fetchall()
+		return [dict(row) for row in rows]
+
 	def list_jobs(self, *, limit: int = 100, min_score: int = 0, status: str | None = None) -> list[dict[str, object]]:
 		query = "SELECT * FROM jobs WHERE score >= ?"
 		params: list[object] = [min_score]
@@ -252,10 +307,10 @@ class JobStore:
 				"""
 				SELECT
 					COUNT(*) AS total,
-					SUM(CASE WHEN score >= 85 THEN 1 ELSE 0 END) AS high_match,
-					SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END) AS applied,
-					SUM(CASE WHEN status = 'saved' THEN 1 ELSE 0 END) AS saved,
-					SUM(CASE WHEN status = 'ignored' THEN 1 ELSE 0 END) AS ignored,
+					COALESCE(SUM(CASE WHEN score >= 85 THEN 1 ELSE 0 END), 0) AS high_match,
+					COALESCE(SUM(CASE WHEN status = 'applied' THEN 1 ELSE 0 END), 0) AS applied,
+					COALESCE(SUM(CASE WHEN status = 'saved' THEN 1 ELSE 0 END), 0) AS saved,
+					COALESCE(SUM(CASE WHEN status = 'ignored' THEN 1 ELSE 0 END), 0) AS ignored,
 					COALESCE(ROUND(AVG(score), 1), 0) AS avg_score
 				FROM jobs
 				"""
