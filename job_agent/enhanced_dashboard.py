@@ -10,12 +10,14 @@ from urllib.parse import urlparse
 
 from pydantic import ValidationError
 
+from job_agent.credentials import CredentialStore
 from job_agent.dashboard import DashboardHandler, STATIC_DIR
 from job_agent.followup import ContactTracker, ContactUpdate
 
 
 CONTACT_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/contact$")
 CONTACT_TRACKER = ContactTracker(DashboardHandler.store.path)
+CREDENTIAL_STORE = CredentialStore(DashboardHandler.store.path)
 DEFAULT_USD_COP_RATE = 4000.0
 
 
@@ -29,6 +31,7 @@ def _usd_cop_rate() -> float:
 
 class EnhancedDashboardHandler(DashboardHandler):
 	contact_tracker = CONTACT_TRACKER
+	credential_store = CREDENTIAL_STORE
 
 	def _send_static(self, filename: str, content_type: str) -> None:
 		path = STATIC_DIR / filename
@@ -37,7 +40,13 @@ class EnhancedDashboardHandler(DashboardHandler):
 			return
 		body = path.read_bytes()
 		if filename == "app.js":
-			for extra_name in ("costs.js", "automation_control.js", "contact_tracking.js"):
+			for extra_name in (
+				"costs.js",
+				"automation_control.js",
+				"cv_control.js",
+				"contact_tracking.js",
+				"credentials_control.js",
+			):
 				extra = STATIC_DIR / extra_name
 				if extra.exists():
 					body += b"\n\n" + extra.read_bytes()
@@ -47,10 +56,16 @@ class EnhancedDashboardHandler(DashboardHandler):
 		self.end_headers()
 		self.wfile.write(body)
 
+	def _is_loopback_client(self) -> bool:
+		return self.client_address[0] in {"127.0.0.1", "::1"}
+
 	def do_GET(self) -> None:  # noqa: N802
 		parsed = urlparse(self.path)
 		if parsed.path == "/contact_tracking.js":
 			self._send_static("contact_tracking.js", "text/javascript; charset=utf-8")
+			return
+		if parsed.path == "/credentials_control.js":
+			self._send_static("credentials_control.js", "text/javascript; charset=utf-8")
 			return
 		if parsed.path == "/api/currency":
 			rate = _usd_cop_rate()
@@ -64,6 +79,9 @@ class EnhancedDashboardHandler(DashboardHandler):
 		if parsed.path == "/api/contact/stats":
 			self._send_json(self.contact_tracker.stats())
 			return
+		if parsed.path == "/api/computrabajo/credentials":
+			self._send_json(self.credential_store.computrabajo_status())
+			return
 		match = CONTACT_RE.match(parsed.path)
 		if match:
 			job_id = int(match.group("job_id"))
@@ -76,6 +94,25 @@ class EnhancedDashboardHandler(DashboardHandler):
 
 	def do_POST(self) -> None:  # noqa: N802
 		parsed = urlparse(self.path)
+		if parsed.path == "/api/computrabajo/credentials":
+			if not self._is_loopback_client():
+				self._send_json({"error": "Las credenciales solo pueden modificarse desde este PC."}, HTTPStatus.FORBIDDEN)
+				return
+			try:
+				body = self._read_json()
+				username = str(body.get("username") or "")
+				password = str(body.get("password") or "")
+				self._send_json(self.credential_store.save_computrabajo(username, password))
+			except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
+				self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+			return
+		if parsed.path == "/api/computrabajo/credentials/clear":
+			if not self._is_loopback_client():
+				self._send_json({"error": "Las credenciales solo pueden modificarse desde este PC."}, HTTPStatus.FORBIDDEN)
+				return
+			self.credential_store.clear_computrabajo()
+			self._send_json({"configured": False, "message": "Credenciales eliminadas."})
+			return
 		match = CONTACT_RE.match(parsed.path)
 		if match:
 			try:
