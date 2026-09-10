@@ -185,6 +185,14 @@ class EnhancedDashboardHandler(DashboardHandler):
 
 	def do_POST(self) -> None:  # noqa: N802
 		parsed = urlparse(self.path)
+		if parsed.path == "/api/jobs/rescore":
+			rescored = self.collector.rescore_existing_jobs()
+			self._send_json({
+				"rescored_jobs": rescored,
+				"uses_ai": False,
+				"message": f"Scores actualizados. {rescored} vacantes recalculadas localmente.",
+			})
+			return
 		if parsed.path == "/api/profile/min-salary":
 			try:
 				body = self._read_json()
@@ -233,8 +241,11 @@ class EnhancedDashboardHandler(DashboardHandler):
 				body.setdefault("min_monthly_salary_cop", current.min_monthly_salary_cop)
 				profile = UserProfile.model_validate(body)
 				saved = self.profile_store.save(profile)
-				self.collector.rescore_existing_jobs()
-				self._send_json(saved.model_dump())
+				rescored = self.collector.rescore_existing_jobs()
+				payload = saved.model_dump()
+				payload["rescored_jobs"] = rescored
+				payload["message"] = f"Perfil actualizado. {rescored} vacantes recalculadas localmente."
+				self._send_json(payload)
 			except (ValidationError, ValueError, json.JSONDecodeError) as exc:
 				self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 			return
