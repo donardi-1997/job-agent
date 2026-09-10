@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 
 DEFAULT_MIN_MONTHLY_SALARY_COP = 4_000_000
+_ANNUAL_RE = re.compile(r"\b(?:anual|al\s+a[nñ]o|por\s+a[nñ]o)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ def assess_salary_text(text: str, minimum_monthly_salary_cop: int = DEFAULT_MIN_
 
 	markers = list(
 		re.finditer(
-			r"\b(?:salario|sueldo|remuneraci[oó]n|compensaci[oó]n|rango\s+salarial|salario\s+mensual)\b",
+			r"\b(?:salario|sueldo|remuneraci[oó]n|compensaci[oó]n|rango\s+salarial)\b",
 			compact,
 			re.IGNORECASE,
 		)
@@ -77,7 +78,7 @@ def assess_salary_text(text: str, minimum_monthly_salary_cop: int = DEFAULT_MIN_
 		end = min(len(compact), marker.end() + 150)
 		window = compact[start:end]
 		# Do not interpret an explicitly annual amount as a monthly salary.
-		if re.search(r"\b(?:anual|al\s+a[nñ]o|por\s+a[nñ]o)\b", window, re.IGNORECASE):
+		if _ANNUAL_RE.search(window):
 			continue
 		windows.append(window)
 
@@ -87,6 +88,8 @@ def assess_salary_text(text: str, minimum_monthly_salary_cop: int = DEFAULT_MIN_
 		start = max(0, match.start() - 45)
 		end = min(len(compact), match.end() + 70)
 		window = compact[start:end]
+		if _ANNUAL_RE.search(window):
+			continue
 		if re.search(r"\b(?:mensual|mes|salario|sueldo)\b", window, re.IGNORECASE):
 			windows.append(window)
 
