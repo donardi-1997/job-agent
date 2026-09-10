@@ -1,4 +1,4 @@
-from job_agent.computrabajo.application import AssistedApplicationPreparer
+from job_agent.computrabajo.application import AssistedApplicationPreparer, RealApplicationDraftOutput
 
 
 def test_application_task_submits_without_inventing_personal_data() -> None:
@@ -25,6 +25,16 @@ def test_application_task_submits_without_inventing_personal_data() -> None:
 	assert "Never invent facts" in task
 	assert "Never bypass CAPTCHA" in task
 	assert "Inmediata" in task
+	assert '"done"' in task
+	assert '"data"' in task
+	assert 'Do not put result fields directly under "done"' in task
+
+
+def test_real_application_schema_defaults_cannot_report_test_mode() -> None:
+	result = RealApplicationDraftOutput(submitted=True, submission_status="submitted")
+
+	assert result.mode == "real"
+	assert result.test_mode is False
 
 
 def test_application_task_contains_only_supplied_profile_facts_and_saved_answers() -> None:
