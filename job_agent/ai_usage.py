@@ -39,6 +39,48 @@ class UsageSnapshot:
     pricing_known: bool
 
 
+class AIUsageBudgetExceeded(RuntimeError):
+    """Raised before an LLM call when the configured batch budget is exhausted."""
+
+
+@dataclass
+class AIUsageBudget:
+    """Shared mutable budget that can be passed to every LLM used by one batch."""
+
+    max_calls: int = 10
+    max_cost_usd: float = 0.10
+    calls: int = 0
+    estimated_cost_usd: float = 0.0
+
+    def before_call(self) -> None:
+        if self.max_calls >= 0 and self.calls >= self.max_calls:
+            raise AIUsageBudgetExceeded(
+                f"Presupuesto de IA agotado: {self.calls}/{self.max_calls} llamadas usadas."
+            )
+        if self.max_cost_usd >= 0 and self.estimated_cost_usd >= self.max_cost_usd:
+            raise AIUsageBudgetExceeded(
+                "Presupuesto de IA agotado: "
+                f"US${self.estimated_cost_usd:.4f}/US${self.max_cost_usd:.4f} estimados."
+            )
+
+    def consume(self, snapshot: UsageSnapshot | None = None) -> None:
+        self.calls += 1
+        if snapshot is not None and snapshot.pricing_known:
+            self.estimated_cost_usd += max(0.0, float(snapshot.estimated_cost_usd))
+
+    def status(self) -> dict[str, object]:
+        return {
+            "calls": self.calls,
+            "max_calls": self.max_calls,
+            "estimated_cost_usd": round(self.estimated_cost_usd, 6),
+            "max_cost_usd": round(self.max_cost_usd, 6),
+            "exhausted": (
+                (self.max_calls >= 0 and self.calls >= self.max_calls)
+                or (self.max_cost_usd >= 0 and self.estimated_cost_usd >= self.max_cost_usd)
+            ),
+        }
+
+
 UsageListener = Callable[[UsageSnapshot], object]
 
 
@@ -49,16 +91,24 @@ class MeteredChatBrowserUse(ChatBrowserUse):
     therefore follows the effective model, not the alias originally requested.
 
     ``on_usage`` is called immediately after every successful LLM response that
-    includes usage. This lets Job Agent persist spend while a long browser agent
-    is still running, instead of waiting until the whole application finishes.
+    includes usage. ``usage_budget`` is checked before every invocation, allowing a
+    batch to share one hard call/cost budget across search, question resolution and
+    full browser-agent fallbacks.
     """
 
-    def __init__(self, *args: Any, on_usage: UsageListener | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        on_usage: UsageListener | None = None,
+        usage_budget: AIUsageBudget | None = None,
+        **kwargs: Any,
+    ) -> None:
         requested_model = kwargs.get("model")
         if requested_model is None and args and isinstance(args[0], str):
             requested_model = args[0]
         self._requested_model = str(requested_model) if requested_model else ""
         self._on_usage = on_usage
+        self._usage_budget = usage_budget
         super().__init__(*args, **kwargs)
         if not self._requested_model:
             self._requested_model = str(self.model)
@@ -98,8 +148,12 @@ class MeteredChatBrowserUse(ChatBrowserUse):
         )
 
     async def ainvoke(self, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        if self._usage_budget is not None:
+            self._usage_budget.before_call()
+
         completion = await super().ainvoke(*args, **kwargs)
         usage = completion.usage
+        delta: UsageSnapshot | None = None
         if usage is not None:
             prompt_tokens = int(usage.prompt_tokens or 0)
             cached_tokens = int(usage.prompt_cached_tokens or 0)
@@ -118,6 +172,10 @@ class MeteredChatBrowserUse(ChatBrowserUse):
                     # Telemetry must never break browser automation, but failures must
                     # be visible so real spend cannot disappear silently.
                     logger.warning("Could not persist Browser Use usage event: %s", exc)
+
+        if self._usage_budget is not None:
+            # Count every successful provider call even if the provider omitted usage.
+            self._usage_budget.consume(delta)
         return completion
 
     def snapshot(self) -> UsageSnapshot:
