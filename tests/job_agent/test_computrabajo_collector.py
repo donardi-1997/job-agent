@@ -28,6 +28,7 @@ def test_search_ai_fallback_is_bounded_and_computrabajo_only(monkeypatch: pytest
 
 	assert "Use Computrabajo only" in task
 	assert "Do not navigate to Google" in task
+	monkeypatch.delenv("JOB_AGENT_SEARCH_AI_MAX_STEPS", raising=False)
 	assert ComputrabajoCollector._search_ai_max_steps() == 20
 
 	monkeypatch.setenv("JOB_AGENT_SEARCH_AI_MAX_STEPS", "12")
