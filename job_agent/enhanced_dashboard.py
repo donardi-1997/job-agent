@@ -51,6 +51,7 @@ class EnhancedDashboardHandler(DashboardHandler):
 				"search_plan_control.js",
 				"application_efficiency.js",
 				"application_workflow.js",
+				"attempt_explanations.js",
 				"applications_list.js",
 				"pagination_control.js",
 				"contact_tracking.js",
@@ -61,6 +62,9 @@ class EnhancedDashboardHandler(DashboardHandler):
 					body += b"\n\n" + extra.read_bytes()
 		self.send_response(HTTPStatus.OK)
 		self.send_header("Content-Type", content_type)
+		self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+		self.send_header("Pragma", "no-cache")
+		self.send_header("Expires", "0")
 		self.send_header("Content-Length", str(len(body)))
 		self.end_headers()
 		self.wfile.write(body)
@@ -87,6 +91,9 @@ class EnhancedDashboardHandler(DashboardHandler):
 			return
 		if parsed.path == "/application_workflow.js":
 			self._send_static("application_workflow.js", "text/javascript; charset=utf-8")
+			return
+		if parsed.path == "/attempt_explanations.js":
+			self._send_static("attempt_explanations.js", "text/javascript; charset=utf-8")
 			return
 		if parsed.path == "/applications_list.js":
 			self._send_static("applications_list.js", "text/javascript; charset=utf-8")
