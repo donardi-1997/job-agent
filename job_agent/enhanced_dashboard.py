@@ -14,6 +14,7 @@ from job_agent.credentials import CredentialStore
 from job_agent.dashboard import DashboardHandler, STATIC_DIR
 from job_agent.followup import ContactTracker, ContactUpdate
 from job_agent.profile import UserProfile
+from job_agent.search_terms import build_personal_search_terms
 
 
 CONTACT_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/contact$")
@@ -46,6 +47,7 @@ class EnhancedDashboardHandler(DashboardHandler):
 				"automation_control.js",
 				"cv_control.js",
 				"profile_summary_control.js",
+				"search_plan_control.js",
 				"contact_tracking.js",
 				"credentials_control.js",
 			):
@@ -71,6 +73,20 @@ class EnhancedDashboardHandler(DashboardHandler):
 			return
 		if parsed.path == "/profile_summary_control.js":
 			self._send_static("profile_summary_control.js", "text/javascript; charset=utf-8")
+			return
+		if parsed.path == "/search_plan_control.js":
+			self._send_static("search_plan_control.js", "text/javascript; charset=utf-8")
+			return
+		if parsed.path == "/api/search/plan":
+			profile = self.profile_store.get()
+			terms = build_personal_search_terms(profile, limit=8)
+			self._send_json({
+				"terms": terms,
+				"skills_count": len(profile.skills),
+				"roles_count": len(profile.target_roles),
+				"generator": "deterministic",
+				"uses_ai": False,
+			})
 			return
 		if parsed.path == "/api/currency":
 			rate = _usd_cop_rate()
