@@ -44,6 +44,7 @@ def test_bu_latest_is_priced_as_resolved_bu_2() -> None:
 
 @pytest.mark.asyncio
 async def test_usage_listener_receives_each_llm_response_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JOB_AGENT_ZERO_COST", "0")
     observed = []
 
     async def fake_ainvoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
@@ -69,6 +70,7 @@ async def test_usage_listener_receives_each_llm_response_immediately(monkeypatch
 
 @pytest.mark.asyncio
 async def test_shared_ai_budget_blocks_before_extra_provider_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JOB_AGENT_ZERO_COST", "0")
     provider_calls = 0
 
     async def fake_ainvoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
@@ -93,6 +95,25 @@ async def test_shared_ai_budget_blocks_before_extra_provider_call(monkeypatch: p
     assert provider_calls == 1
     assert budget.calls == 1
     assert budget.estimated_cost_usd > 0
+
+
+@pytest.mark.asyncio
+async def test_zero_cost_mode_blocks_before_provider_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JOB_AGENT_ZERO_COST", "1")
+    provider_calls = 0
+
+    async def fake_ainvoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal provider_calls
+        provider_calls += 1
+        return SimpleNamespace(usage=None)
+
+    monkeypatch.setattr(ChatBrowserUse, "ainvoke", fake_ainvoke)
+    llm = MeteredChatBrowserUse(model="bu-2-0", api_key="test-key")
+
+    with pytest.raises(AIUsageBudgetExceeded, match="ZERO COST"):
+        await llm.ainvoke([])
+
+    assert provider_calls == 0
 
 
 def test_zero_ai_budget_disables_provider_before_first_call() -> None:
