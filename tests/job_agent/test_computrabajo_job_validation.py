@@ -9,6 +9,7 @@ from job_agent.storage import JobRecord, JobStore
 
 VALID_URL = "https://co.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-backend-developer-en-bogota-ABC123"
 ERROR_URL = "https://co.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-error-DEF456"
+HISTORICAL_URL = "https://co.computrabajo.com/empleos/backend-developer-OLD123"
 
 
 def _record(external_id: str, title: str, url: str) -> JobRecord:
@@ -41,15 +42,17 @@ def test_validates_canonical_vacancy_and_rejects_error_pages() -> None:
     )
 
 
-def test_purge_removes_historical_403_job_and_attempt_but_keeps_real_job(tmp_path: Path) -> None:
+def test_purge_removes_historical_403_job_and_attempt_but_keeps_real_jobs(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "jobs.db")
     store.upsert_jobs([
         _record("valid", "Backend Developer", VALID_URL),
+        _record("historical", "Legacy Backend Developer", HISTORICAL_URL),
         _record("error", "403 Forbidden", ERROR_URL),
     ])
     jobs = store.list_jobs(limit=20)
     error_job = next(job for job in jobs if job["external_id"] == "error")
     valid_job = next(job for job in jobs if job["external_id"] == "valid")
+    historical_job = next(job for job in jobs if job["external_id"] == "historical")
 
     store.save_application_attempt(
         int(error_job["id"]),
@@ -68,4 +71,5 @@ def test_purge_removes_historical_403_job_and_attempt_but_keeps_real_job(tmp_pat
     assert removed == 1
     assert store.get_job(int(error_job["id"])) is None
     assert store.get_job(int(valid_job["id"])) is not None
+    assert store.get_job(int(historical_job["id"])) is not None
     assert store.list_application_attempts(int(error_job["id"])) == []
