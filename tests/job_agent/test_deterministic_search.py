@@ -40,6 +40,11 @@ def test_deterministic_navigation_accepts_only_computrabajo_https() -> None:
     assert is_safe_computrabajo_url("https://co.computrabajo.com.evil.test/job") is False
 
 
+def test_search_request_ai_fallback_is_explicitly_opt_in() -> None:
+    assert SearchRequest(keyword="Python").allow_ai_fallback is False
+    assert SearchRequest(keyword="Python", allow_ai_fallback=True).allow_ai_fallback is True
+
+
 def test_search_execution_store_reports_ai_avoidance_rate(tmp_path: Path) -> None:
     store = SearchExecutionStore(tmp_path / "jobs.db")
     store.record(keyword="Python", location="Colombia", mode="deterministic", found=8)
@@ -75,7 +80,7 @@ async def test_collector_uses_deterministic_results_without_ai(tmp_path: Path) -
                 search_url="https://co.computrabajo.com/trabajo-de-python-backend-developer",
             )
 
-    async def ai_must_not_run(_: SearchRequest) -> SearchOutput:
+    async def ai_must_not_run(*_: object, **__: object) -> SearchOutput:
         raise AssertionError("AI fallback should not run when deterministic extraction succeeds")
 
     collector.deterministic_search = LocalSearch()  # type: ignore[assignment]
@@ -91,10 +96,38 @@ async def test_collector_uses_deterministic_results_without_ai(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_collector_uses_ai_only_when_local_extraction_has_zero_results(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_search_ai_is_not_called_by_default_when_local_results_are_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = JobStore(tmp_path / "jobs.db")
     collector = ComputrabajoCollector(store=store, profile_dir=tmp_path / "browser")
     monkeypatch.setenv("BROWSER_USE_API_KEY", "test-key")
+    monkeypatch.delenv("JOB_AGENT_SEARCH_AI_FALLBACK", raising=False)
+
+    class EmptyLocalSearch:
+        async def collect(self, **_: object) -> DeterministicSearchResult:
+            return DeterministicSearchResult((), "https://co.computrabajo.com/trabajo-de-python", "DOM changed")
+
+    async def ai_must_not_run(*_: object, **__: object) -> SearchOutput:
+        raise AssertionError("Search AI is opt-in and must not run by default")
+
+    collector.deterministic_search = EmptyLocalSearch()  # type: ignore[assignment]
+    collector._collect_with_ai = ai_must_not_run  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="fallback de IA desactivado"):
+        await collector._collect(SearchRequest(keyword="Python Developer", max_results=10))
+
+
+@pytest.mark.asyncio
+async def test_collector_uses_ai_only_when_user_opts_in_and_local_extraction_has_zero_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    collector = ComputrabajoCollector(store=store, profile_dir=tmp_path / "browser")
+    monkeypatch.setenv("BROWSER_USE_API_KEY", "test-key")
+    monkeypatch.delenv("JOB_AGENT_SEARCH_AI_FALLBACK", raising=False)
 
     class EmptyLocalSearch:
         async def collect(self, **_: object) -> DeterministicSearchResult:
@@ -104,7 +137,7 @@ async def test_collector_uses_ai_only_when_local_extraction_has_zero_results(tmp
                 reason="DOM changed",
             )
 
-    async def fake_ai(_: SearchRequest) -> SearchOutput:
+    async def fake_ai(*_: object, **__: object) -> SearchOutput:
         return SearchOutput(
             jobs=[
                 ExtractedJob(
@@ -120,7 +153,9 @@ async def test_collector_uses_ai_only_when_local_extraction_has_zero_results(tmp
     collector.deterministic_search = EmptyLocalSearch()  # type: ignore[assignment]
     collector._collect_with_ai = fake_ai  # type: ignore[method-assign]
 
-    output = await collector._collect(SearchRequest(keyword="Python Developer", max_results=10))
+    output = await collector._collect(
+        SearchRequest(keyword="Python Developer", max_results=10, allow_ai_fallback=True)
+    )
 
     assert len(output.jobs) == 1
     assert collector.last_collection_info() == {"mode": "ai_fallback", "fallback_reason": "DOM changed"}
