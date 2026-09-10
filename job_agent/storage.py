@@ -204,12 +204,12 @@ class JobStore:
 		return any(marker in confirmation for marker in markers)
 
 	def reconcile_application_statuses(self) -> int:
-		"""Repair jobs whose persisted non-TEST attempts already prove submission."""
+		"""Repair attempts/jobs whose persisted non-TEST evidence already proves submission."""
 		with self.connect() as connection:
 			rows = connection.execute(
-				"SELECT job_id, payload, submitted, submission_status, confirmation_text FROM application_attempts"
+				"SELECT id, job_id, payload, submitted, submission_status, confirmation_text FROM application_attempts"
 			).fetchall()
-			confirmed_job_ids: set[int] = set()
+			confirmed_attempts: list[tuple[int, int]] = []
 			for row in rows:
 				try:
 					payload = json.loads(str(row["payload"] or "{}"))
@@ -221,15 +221,19 @@ class JobStore:
 				payload.setdefault("submission_status", str(row["submission_status"] or ""))
 				payload.setdefault("confirmation_text", str(row["confirmation_text"] or ""))
 				if self._payload_confirms_real_submission(payload):
-					confirmed_job_ids.add(int(row["job_id"]))
+					confirmed_attempts.append((int(row["id"]), int(row["job_id"])))
 
 			repaired = 0
-			for job_id in confirmed_job_ids:
-				cursor = connection.execute(
+			for attempt_id, job_id in confirmed_attempts:
+				attempt_cursor = connection.execute(
+					"UPDATE application_attempts SET submitted = 1 WHERE id = ? AND submitted = 0",
+					(attempt_id,),
+				)
+				job_cursor = connection.execute(
 					"UPDATE jobs SET status = 'applied' WHERE id = ? AND status <> 'applied'",
 					(job_id,),
 				)
-				repaired += max(0, cursor.rowcount)
+				repaired += max(0, attempt_cursor.rowcount) + max(0, job_cursor.rowcount)
 			return repaired
 
 	def upsert_jobs(self, jobs: Iterable[JobRecord]) -> int:
