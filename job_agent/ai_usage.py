@@ -11,11 +11,12 @@ from browser_use import ChatBrowserUse
 from job_agent.storage import DEFAULT_DB_PATH
 
 
-# Browser Use published token pricing. Keep this table explicit so cost estimates
-# remain auditable instead of hiding a magic per-run number.
+# Browser Use published token pricing in USD per million tokens:
+# (input, cached input, output). Keep this table explicit so estimates remain
+# auditable and easy to update when Browser Use changes pricing.
 MODEL_PRICING_USD_PER_MILLION: dict[str, tuple[float, float, float]] = {
     "bu-2-0": (0.60, 0.06, 3.50),
-    "bu-latest": (0.60, 0.06, 3.50),
+    "bu-latest": (0.20, 0.02, 2.00),
     "bu-1-0": (0.20, 0.02, 2.00),
 }
 
@@ -33,7 +34,7 @@ class UsageSnapshot:
 
 
 class MeteredChatBrowserUse(ChatBrowserUse):
-    """ChatBrowserUse client that accumulates real token usage returned by the API."""
+    """ChatBrowserUse client that accumulates token usage returned by the API."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -138,6 +139,20 @@ class AIUsageStore:
                 ),
             )
             return int(cursor.lastrowid)
+
+    def record_safely(
+        self,
+        operation: str,
+        snapshot: UsageSnapshot,
+        *,
+        job_id: int | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> int | None:
+        """Best-effort telemetry: usage logging must never break the user workflow."""
+        try:
+            return self.record(operation, snapshot, job_id=job_id, metadata=metadata)
+        except Exception:
+            return None
 
     def summary(self) -> dict[str, object]:
         with self._connect() as connection:
