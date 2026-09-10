@@ -32,7 +32,7 @@ class SearchPreferences:
 
 @dataclass(frozen=True)
 class CandidateProfile:
-	"""Minimal candidate data used by the first dry-run matcher."""
+	"""Candidate data used by the deterministic first-pass matcher."""
 
 	target_roles: tuple[str, ...] = ()
 	skills: tuple[str, ...] = ()
@@ -40,3 +40,6 @@ class CandidateProfile:
 	languages: dict[str, str] = field(default_factory=dict)
 	preferred_locations: tuple[str, ...] = ("Colombia",)
 	remote_ok: bool = True
+	# User-authored context. This influences relevance scoring but is not treated
+	# as independently verified proof of a skill or employment fact.
+	professional_summary: str = ""
