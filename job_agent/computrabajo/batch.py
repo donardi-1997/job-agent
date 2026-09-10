@@ -156,7 +156,7 @@ class BatchApplyRunner:
 				self._set_status(state="completed", message=message)
 				return
 
-			# max_results is the total discovery budget across all profile search terms.
+			# max_results is a global discovery budget, not a per-keyword multiplier.
 			per_term = max(1, min(50, (request.max_results + len(search_terms) - 1) // len(search_terms)))
 			remaining_results = request.max_results
 			external_ids: set[str] = set()
@@ -179,13 +179,13 @@ class BatchApplyRunner:
 				)
 				self.collector._persist(search_output.jobs)
 				searches_completed += 1
-				remaining_results -= term_limit
 
 				for job in search_output.jobs:
 					url = str(job.url)
 					found_urls.add(url)
 					external_ids.add(hashlib.sha256(url.encode("utf-8")).hexdigest()[:24])
 
+				remaining_results = max(0, request.max_results - len(found_urls))
 				self._set_status(
 					searches_completed=searches_completed,
 					found=len(found_urls),
