@@ -1,59 +1,45 @@
 """Computrabajo integration for the local Job Agent application."""
 
-from __future__ import annotations
-
-import importlib
 import sys
 
 from job_agent.async_runtime import run_async
+from job_agent.computrabajo.application import PreparationStatus
+from job_agent.computrabajo.smart_application import SmartApplicationPreparer as AssistedApplicationPreparer
+from job_agent.computrabajo.batch import BatchApplyRequest, BatchApplyRunner, BatchApplyStatus
+from job_agent.computrabajo.collector import ComputrabajoCollector, SearchRequest, SearchRunStatus
 
 
 class _PersistentAsyncioRunAdapter:
-    """Route legacy worker asyncio.run() calls through the persistent runtime."""
+    """Keep legacy module calls on Job Agent's long-lived browser event loop.
+
+    collector.py, application.py and batch.py historically call asyncio.run() from
+    worker threads. On Windows that closes the Proactor loop immediately after each
+    Chromium/CDP operation and can leave pipe transports finalizing against a closed
+    loop. Until those workers are fully converted to async services, route only their
+    module-local ``asyncio.run`` calls through the persistent runtime. This does not
+    monkey-patch the stdlib asyncio module globally.
+    """
 
     run = staticmethod(run_async)
 
 
-_EXPORTS: dict[str, tuple[str, str]] = {
-    "AssistedApplicationPreparer": (
-        "job_agent.computrabajo.smart_application",
-        "SmartApplicationPreparer",
-    ),
-    "BatchApplyRequest": ("job_agent.computrabajo.batch", "BatchApplyRequest"),
-    "BatchApplyRunner": ("job_agent.computrabajo.batch", "BatchApplyRunner"),
-    "BatchApplyStatus": ("job_agent.computrabajo.batch", "BatchApplyStatus"),
-    "ComputrabajoCollector": ("job_agent.computrabajo.collector", "ComputrabajoCollector"),
-    "PreparationStatus": ("job_agent.computrabajo.application", "PreparationStatus"),
-    "SearchRequest": ("job_agent.computrabajo.collector", "SearchRequest"),
-    "SearchRunStatus": ("job_agent.computrabajo.collector", "SearchRunStatus"),
-}
+for _module_name in (
+    "job_agent.computrabajo.application",
+    "job_agent.computrabajo.batch",
+    "job_agent.computrabajo.collector",
+):
+    _module = sys.modules.get(_module_name)
+    if _module is not None:
+        _module.asyncio = _PersistentAsyncioRunAdapter
 
 
-def _patch_runtime_modules() -> None:
-    for module_name in (
-        "job_agent.computrabajo.application",
-        "job_agent.computrabajo.batch",
-        "job_agent.computrabajo.collector",
-    ):
-        module = sys.modules.get(module_name)
-        if module is not None:
-            module.asyncio = _PersistentAsyncioRunAdapter
-
-
-def __getattr__(name: str):
-    target = _EXPORTS.get(name)
-    if target is None:
-        raise AttributeError(name)
-    module_name, attribute = target
-    module = importlib.import_module(module_name)
-    _patch_runtime_modules()
-    value = getattr(module, attribute)
-    globals()[name] = value
-    return value
-
-
-def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_EXPORTS))
-
-
-__all__ = list(_EXPORTS)
+__all__ = [
+    "AssistedApplicationPreparer",
+    "BatchApplyRequest",
+    "BatchApplyRunner",
+    "BatchApplyStatus",
+    "ComputrabajoCollector",
+    "PreparationStatus",
+    "SearchRequest",
+    "SearchRunStatus",
+]
