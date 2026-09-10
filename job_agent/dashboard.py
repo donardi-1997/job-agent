@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 from pydantic import ValidationError
 
 from job_agent.computrabajo import AssistedApplicationPreparer, ComputrabajoCollector, SearchRequest
+from job_agent.computrabajo.application import ApplicationDraftOutput
 from job_agent.profile import ProfileStore, UserProfile
 from job_agent.storage import JobStore
 
@@ -45,7 +46,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 		length = int(self.headers.get("Content-Length", "0"))
 		if length <= 0:
 			return {}
-		if length > 32_768:
+		if length > 131_072:
 			raise ValueError("Request body too large")
 		decoded = json.loads(self.rfile.read(length).decode("utf-8"))
 		if not isinstance(decoded, dict):
@@ -123,8 +124,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
 			body = self._read_json()
 			if parsed.path == "/api/profile":
 				profile = UserProfile.model_validate(body)
-				if profile.prepare_application_score < profile.min_score:
-					raise ValueError("prepare_application_score must be greater than or equal to min_score")
 				self._send_json(self.profile_store.save(profile).model_dump())
 				return
 			if parsed.path == "/api/search":
@@ -140,12 +139,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 			match = JOB_STATUS_RE.match(parsed.path)
 			if match:
-				status = str(body.get("status", ""))
-				job = self.store.update_status(int(match.group("job_id")), status)
+				job = self.store.update_status(int(match.group("job_id")), str(body.get("status", "")))
 				if not job:
 					self._send_json({"error": "Vacante no encontrada."}, HTTPStatus.NOT_FOUND)
 					return
 				self._send_json(job)
+				return
+
+			match = JOB_DRAFT_RE.match(parsed.path)
+			if match:
+				job_id = int(match.group("job_id"))
+				draft = ApplicationDraftOutput.model_validate(body)
+				self._send_json(self.store.save_application_draft(job_id, draft.model_dump()))
 				return
 
 			match = JOB_PREPARE_RE.match(parsed.path)
