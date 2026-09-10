@@ -157,40 +157,82 @@ If CAPTCHA, 2FA, or anti-bot protection blocks the task, stop instead of bypassi
 Return only actual vacancies on co.computrabajo.com.
 """.strip()
 
-	def _persist(self, jobs: list[ExtractedJob]) -> int:
+	def _record_for_job(
+		self,
+		*,
+		external_id: str,
+		title: str,
+		company: str,
+		location: str,
+		url: str,
+		description: str,
+		status: str = "discovered",
+	) -> JobRecord:
 		settings = self.profile_store.get()
 		profile = settings.to_candidate_profile()
 		preferences = settings.to_search_preferences()
+		posting = JobPosting(
+			title=title,
+			company=company,
+			location=location,
+			description=description,
+			url=url,
+		)
+		match = score_job(posting, profile, preferences)
+		text = f"{title} {description}".casefold()
+		matched_skills = tuple(skill for skill in profile.skills if skill.casefold() in text)
+		missing_skills = tuple(skill for skill in profile.skills if skill.casefold() not in text)
+		return JobRecord(
+			id=None,
+			source="computrabajo",
+			external_id=external_id,
+			title=title,
+			company=company,
+			location=location,
+			url=url,
+			score=match.score,
+			band=match.decision,
+			status=status,
+			description=description,
+			match_reasons=match.reasons,
+			matched_skills=matched_skills,
+			missing_skills=missing_skills,
+		)
+
+	def _persist(self, jobs: list[ExtractedJob]) -> int:
 		records: list[JobRecord] = []
 		for item in jobs:
 			url = str(item.url)
-			posting = JobPosting(
-				title=item.title,
-				company=item.company,
-				location=item.location,
-				description=item.description,
-				url=url,
-			)
-			match = score_job(posting, profile, preferences)
-			text = f"{item.title} {item.description}".casefold()
-			matched_skills = tuple(skill for skill in profile.skills if skill.casefold() in text)
-			missing_skills = tuple(skill for skill in profile.skills if skill.casefold() not in text)
 			records.append(
-				JobRecord(
-					id=None,
-					source="computrabajo",
+				self._record_for_job(
 					external_id=hashlib.sha256(url.encode("utf-8")).hexdigest()[:24],
 					title=item.title,
 					company=item.company,
 					location=item.location,
 					url=url,
-					score=match.score,
-					band=match.decision,
-					status="discovered",
 					description=item.description,
-					match_reasons=match.reasons,
-					matched_skills=matched_skills,
-					missing_skills=missing_skills,
 				)
 			)
 		return self.store.upsert_jobs(records)
+
+	def rescore_existing_jobs(self) -> int:
+		"""Recalculate all stored Computrabajo vacancies after the local profile changes."""
+		jobs = self.store.list_jobs(limit=10000)
+		records: list[JobRecord] = []
+		for job in jobs:
+			if str(job.get("source") or "") != "computrabajo":
+				continue
+			records.append(
+				self._record_for_job(
+					external_id=str(job.get("external_id") or ""),
+					title=str(job.get("title") or ""),
+					company=str(job.get("company") or ""),
+					location=str(job.get("location") or ""),
+					url=str(job.get("url") or ""),
+					description=str(job.get("description") or ""),
+					status=str(job.get("status") or "discovered"),
+				)
+			)
+		if records:
+			self.store.upsert_jobs(records)
+		return len(records)
