@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from job_agent.dashboard import run_dashboard
+from job_agent.enhanced_dashboard import run_dashboard
 
 
 def main() -> None:
