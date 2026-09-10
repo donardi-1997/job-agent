@@ -30,8 +30,32 @@
 		root.querySelector('#automationToggle').addEventListener('change', onToggle);
 	}
 
+	async function restoreActionButtons() {
+		if (!automationEnabled) return;
+		const batchButton = document.querySelector('#batchButton');
+		const prepareButton = document.querySelector('#prepareButton');
+		try {
+			const [batchResponse, prepareResponse] = await Promise.all([
+				fetch('/api/batch/status', { cache: 'no-store' }),
+				fetch('/api/prepare/status', { cache: 'no-store' }),
+			]);
+			const batch = batchResponse.ok ? await batchResponse.json() : {};
+			const prepare = prepareResponse.ok ? await prepareResponse.json() : {};
+			const batchRunning = ['searching', 'applying'].includes(batch.state);
+			const prepareRunning = prepare.state === 'running';
+			if (batchButton) batchButton.disabled = batchRunning;
+			if (prepareButton) prepareButton.disabled = prepareRunning;
+		} catch (error) {
+			// If status refresh fails, do not keep controls permanently disabled after resume.
+			if (batchButton) batchButton.disabled = false;
+			if (prepareButton) prepareButton.disabled = false;
+			console.error('Unable to restore automation action buttons', error);
+		}
+	}
+
 	function applyState(enabled) {
 		automationEnabled = Boolean(enabled);
+		window.jobAgentAutomationEnabled = automationEnabled;
 		document.body.classList.toggle('automation-paused', !automationEnabled);
 		const toggle = document.querySelector('#automationToggle');
 		const text = document.querySelector('#automationStateText');
@@ -42,7 +66,10 @@
 		if (!automationEnabled) {
 			if (batchButton) batchButton.disabled = true;
 			if (prepareButton) prepareButton.disabled = true;
+		} else {
+			void restoreActionButtons();
 		}
+		document.dispatchEvent(new CustomEvent('job-agent-automation-state', { detail: { enabled: automationEnabled } }));
 	}
 
 	async function loadState() {
@@ -82,6 +109,6 @@
 
 	mount();
 	loadState();
-	// Existing status renderers may update button.disabled; enforce the master pause visually and functionally.
+	// Existing status renderers may update button.disabled; enforce only the paused state.
 	setInterval(() => { if (!automationEnabled) applyState(false); }, 750);
 })();
