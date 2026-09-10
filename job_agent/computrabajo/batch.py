@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 from job_agent.computrabajo.application import AssistedApplicationPreparer
 from job_agent.computrabajo.collector import ComputrabajoCollector, SearchRequest
 from job_agent.profile import ProfileStore
+from job_agent.salary_policy import assess_job_salary
 from job_agent.search_terms import build_personal_search_terms
 from job_agent.storage import JobStore
 
@@ -141,7 +142,12 @@ class BatchApplyRunner:
 		"""
 		with self.store.connect() as connection:
 			rows = connection.execute(query, [*external_ids, min_score]).fetchall()
-		return [self.store._decode_row(row) for row in rows]
+		jobs = [self.store._decode_row(row) for row in rows]
+		profile = self.profile_store.get()
+		return [
+			job for job in jobs
+			if not assess_job_salary(job, profile.min_monthly_salary_cop).blocked
+		]
 
 	@staticmethod
 	def _is_access_block(result: object) -> bool:
@@ -205,7 +211,7 @@ class BatchApplyRunner:
 			if quota == 0:
 				message = (
 					f"Se revisaron {searches_completed} búsquedas generadas desde tu perfil y no hay vacantes nuevas "
-					"que cumplan el umbral y la cuota configurados."
+					"que cumplan el umbral, salario mínimo y cuota configurados."
 				)
 				self.store.update_batch_run(run_id, state="completed", message=message)
 				self._set_status(state="completed", message=message)
