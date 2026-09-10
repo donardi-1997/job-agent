@@ -18,6 +18,7 @@ class SearchPreferences:
 	remote_ok: bool = True
 	min_score: int = 60
 	prepare_application_score: int = 85
+	min_monthly_salary_cop: int = 4_000_000
 	max_required_experience_years: int = 5
 	excluded_terms: tuple[str, ...] = ("english c1", "inglés c1")
 	auto_fill: bool = True
@@ -28,6 +29,8 @@ class SearchPreferences:
 			raise ValueError("min_score must be between 0 and 100")
 		if not self.min_score <= self.prepare_application_score <= 100:
 			raise ValueError("prepare_application_score must be between min_score and 100")
+		if self.min_monthly_salary_cop < 0:
+			raise ValueError("min_monthly_salary_cop must be non-negative")
 
 
 @dataclass(frozen=True)
