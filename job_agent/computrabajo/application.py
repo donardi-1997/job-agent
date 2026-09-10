@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 from browser_use import Agent, Browser
-from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse
+from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse, UsageSnapshot
 from job_agent.answer_memory import AnswerMemory
 from job_agent.computrabajo.browser_config import allowed_domains
 from job_agent.computrabajo.deterministic_application import (
@@ -26,6 +26,7 @@ from job_agent.storage import ApplicationModeStore, JobStore
 
 DEFAULT_PROFILE_DIR = Path("data/browser-profile")
 DEFAULT_BROWSER_MODEL = "bu-latest"
+DEFAULT_APPLICATION_AI_MAX_STEPS = 35
 
 
 class ApplicationQuestion(BaseModel):
@@ -383,6 +384,14 @@ class AssistedApplicationPreparer:
             )
         return result
 
+    @staticmethod
+    def _application_ai_max_steps() -> int:
+        raw = os.getenv("JOB_AGENT_APPLICATION_AI_MAX_STEPS", str(DEFAULT_APPLICATION_AI_MAX_STEPS))
+        try:
+            return max(10, min(70, int(raw)))
+        except ValueError:
+            return DEFAULT_APPLICATION_AI_MAX_STEPS
+
     async def _apply_with_ai(
         self,
         job: dict[str, object],
@@ -397,7 +406,23 @@ class AssistedApplicationPreparer:
             headless=False,
             allowed_domains=allowed_domains(),
         )
-        llm = MeteredChatBrowserUse(model=os.getenv("JOB_AGENT_BROWSER_MODEL", DEFAULT_BROWSER_MODEL))
+        requested_model = os.getenv("JOB_AGENT_BROWSER_MODEL", DEFAULT_BROWSER_MODEL)
+        job_id = int(job["id"])
+
+        def persist_live_usage(snapshot: UsageSnapshot) -> None:
+            self.usage_store.record_safely(
+                "application",
+                snapshot,
+                job_id=job_id,
+                metadata={
+                    "title": str(job.get("title") or ""),
+                    "mode": "ai_fallback",
+                    "granularity": "llm_invocation",
+                    "requested_model": requested_model,
+                },
+            )
+
+        llm = MeteredChatBrowserUse(model=requested_model, on_usage=persist_live_usage)
         try:
             agent = Agent(
                 task=self._build_task(
@@ -425,21 +450,18 @@ class AssistedApplicationPreparer:
                     "Google account settings, security settings, recovery information, or credentials."
                 ),
             )
-            try:
-                history = await agent.run(max_steps=70)
-            finally:
-                self.usage_store.record_safely(
-                    "application",
-                    llm.snapshot(),
-                    job_id=int(job["id"]),
-                    metadata={"title": str(job.get("title") or ""), "mode": "ai_fallback"},
-                )
+            history = await agent.run(max_steps=self._application_ai_max_steps())
             output = history.structured_output
             if output is None:
                 raise RuntimeError(f"No se pudo obtener un resultado estructurado. Resultado: {(history.final_result() or '')[:300]}")
             result = output if isinstance(output, ApplicationDraftOutput) else ApplicationDraftOutput.model_validate(output)
             if application_mode == "test":
                 result = self._enforce_test_invariant(result)
+            else:
+                updates: dict[str, object] = {"mode": "real", "test_mode": False}
+                if result.submitted and result.submission_status == "not_submitted":
+                    updates["submission_status"] = "submitted"
+                result = result.model_copy(update=updates)
             self.answer_memory.remember_questions(
                 [item.model_dump() for item in result.questions],
                 submitted=result.submitted,
