@@ -59,4 +59,10 @@ jobs:
 
       - name: Run SearchJob tests
         shell: bash
-        run: env -u JOB_AGENT_ZERO_COST BROWSER_USE_API_KEY= uv run --no-sync pytest tests/job_agent -q
+        run: |
+          JOB_AGENT_ZERO_COST=0 \
+          JOB_AGENT_SEARCH_AI_FALLBACK=1 \
+          JOB_AGENT_QUESTION_LLM=1 \
+          JOB_AGENT_APPLICATION_AI_FALLBACK=1 \
+          BROWSER_USE_API_KEY= \
+          uv run --no-sync pytest tests/job_agent -q
