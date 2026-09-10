@@ -17,7 +17,7 @@ from job_agent.storage import JobStore
 
 
 DEFAULT_PROFILE_DIR = Path("data/browser-profile")
-DEFAULT_BROWSER_MODEL = "bu-2-0"
+DEFAULT_BROWSER_MODEL = "bu-latest"
 
 
 class ApplicationQuestion(BaseModel):
@@ -149,7 +149,7 @@ class AssistedApplicationPreparer:
 			try:
 				history = await agent.run(max_steps=70)
 			finally:
-				self.usage_store.record(
+				self.usage_store.record_safely(
 					"application",
 					llm.snapshot(),
 					job_id=int(job["id"]),
