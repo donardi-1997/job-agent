@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from browser_use import Agent, Browser
-from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse, UsageSnapshot
+from job_agent.ai_usage import AIUsageBudget, AIUsageStore, MeteredChatBrowserUse, UsageSnapshot
 from job_agent.computrabajo.browser_config import allowed_domains
 from job_agent.computrabajo.deterministic import DeterministicComputrabajoSearch, SearchExecutionStore
 from job_agent.computrabajo.job_validation import is_valid_computrabajo_job
@@ -65,7 +65,7 @@ class SearchRunStatus(BaseModel):
 
 
 class ComputrabajoCollector:
-	"""Discover vacancies locally first, using an LLM only as a bounded fallback."""
+	"""Discover vacancies locally first, using an LLM only as an opt-in bounded fallback."""
 
 	def __init__(self, store: JobStore | None = None, profile_dir: Path | str = DEFAULT_PROFILE_DIR) -> None:
 		self.store = store or JobStore()
@@ -161,7 +161,12 @@ class ComputrabajoCollector:
 				break
 		return valid
 
-	async def _collect(self, request: SearchRequest) -> SearchOutput:
+	async def _collect(
+		self,
+		request: SearchRequest,
+		*,
+		ai_budget: AIUsageBudget | None = None,
+	) -> SearchOutput:
 		"""Try deterministic Chrome/CDP extraction, then optionally fall back to Browser Use AI."""
 		load_dotenv()
 		self._last_collection_mode = ""
@@ -196,7 +201,9 @@ class ComputrabajoCollector:
 			fallback_reason = f"{type(exc).__name__}: {exc}"
 
 		self._last_fallback_reason = fallback_reason
-		fallback_enabled = os.getenv("JOB_AGENT_SEARCH_AI_FALLBACK", "1").strip().casefold() not in {"0", "false", "no", "off"}
+		# Search AI is opt-in. Missing one search term is cheaper and safer than a
+		# runaway browser agent; the batch continues with the next deterministic term.
+		fallback_enabled = os.getenv("JOB_AGENT_SEARCH_AI_FALLBACK", "0").strip().casefold() not in {"0", "false", "no", "off"}
 		if not fallback_enabled:
 			raise RuntimeError(f"Búsqueda local sin resultados y fallback de IA desactivado. {fallback_reason}")
 		if not os.getenv("BROWSER_USE_API_KEY"):
@@ -205,7 +212,7 @@ class ComputrabajoCollector:
 				f"Detalle: {fallback_reason}"
 			)
 
-		output = await self._collect_with_ai(request)
+		output = await self._collect_with_ai(request, ai_budget=ai_budget)
 		self._last_collection_mode = "ai_fallback"
 		self._record_search_execution(request, "ai_fallback", len(output.jobs), fallback_reason)
 		return output
@@ -218,7 +225,12 @@ class ComputrabajoCollector:
 		except ValueError:
 			return DEFAULT_SEARCH_AI_MAX_STEPS
 
-	async def _collect_with_ai(self, request: SearchRequest) -> SearchOutput:
+	async def _collect_with_ai(
+		self,
+		request: SearchRequest,
+		*,
+		ai_budget: AIUsageBudget | None = None,
+	) -> SearchOutput:
 		browser = Browser(
 			user_data_dir=str(self.profile_dir.resolve()),
 			headless=False,
@@ -240,7 +252,11 @@ class ComputrabajoCollector:
 				},
 			)
 
-		llm = MeteredChatBrowserUse(model=requested_model, on_usage=persist_live_usage)
+		llm = MeteredChatBrowserUse(
+			model=requested_model,
+			on_usage=persist_live_usage,
+			usage_budget=ai_budget,
+		)
 		try:
 			agent = Agent(
 				task=self._build_task(request),
