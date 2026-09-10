@@ -108,10 +108,12 @@ class EnhancedDashboardHandler(DashboardHandler):
 				current = self.profile_store.get()
 				profile = UserProfile.model_validate({**current.model_dump(), "professional_summary": summary})
 				self.profile_store.save(profile)
+				rescored = self.collector.rescore_existing_jobs()
 				self._send_json({
 					"professional_summary": profile.professional_summary,
 					"chars": len(profile.professional_summary),
-					"message": "Descripción profesional guardada localmente.",
+					"rescored_jobs": rescored,
+					"message": f"Descripción profesional guardada. {rescored} vacantes recalculadas localmente.",
 				})
 			except (ValidationError, ValueError, json.JSONDecodeError) as exc:
 				self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -125,7 +127,9 @@ class EnhancedDashboardHandler(DashboardHandler):
 				body.setdefault("automation_enabled", current.automation_enabled)
 				body.setdefault("professional_summary", current.professional_summary)
 				profile = UserProfile.model_validate(body)
-				self._send_json(self.profile_store.save(profile).model_dump())
+				saved = self.profile_store.save(profile)
+				self.collector.rescore_existing_jobs()
+				self._send_json(saved.model_dump())
 			except (ValidationError, ValueError, json.JSONDecodeError) as exc:
 				self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 			return
