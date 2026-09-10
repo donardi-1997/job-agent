@@ -9,12 +9,15 @@ from typing import Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-from browser_use import Agent, Browser, ChatBrowserUse
+from browser_use import Agent, Browser
+from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse
+from job_agent.answer_memory import AnswerMemory
 from job_agent.profile import ProfileStore
 from job_agent.storage import JobStore
 
 
 DEFAULT_PROFILE_DIR = Path("data/browser-profile")
+DEFAULT_BROWSER_MODEL = "bu-2-0"
 
 
 class ApplicationQuestion(BaseModel):
@@ -57,6 +60,8 @@ class AssistedApplicationPreparer:
 	def __init__(self, store: JobStore | None = None, profile_dir: Path | str = DEFAULT_PROFILE_DIR) -> None:
 		self.store = store or JobStore()
 		self.profile_store = ProfileStore(self.store.path)
+		self.answer_memory = AnswerMemory(self.store.path)
+		self.usage_store = AIUsageStore(self.store.path)
 		self.profile_dir = Path(profile_dir)
 		self.profile_dir.mkdir(parents=True, exist_ok=True)
 		self._lock = threading.Lock()
@@ -76,7 +81,7 @@ class AssistedApplicationPreparer:
 			self._status = PreparationStatus(
 				state="running",
 				job_id=job_id,
-				message="Abriendo la vacante, completando el formulario y enviando la postulación…",
+				message="Abriendo la vacante, reutilizando respuestas conocidas y completando la postulación…",
 			)
 		threading.Thread(target=self._worker, args=(job_id,), daemon=True, name="application-runner").start()
 		return True
@@ -118,42 +123,63 @@ class AssistedApplicationPreparer:
 
 		profile = self.profile_store.get()
 		saved_draft = self.store.get_application_draft(int(job["id"])) or {}
+		known_answers = self.answer_memory.context_for_agent(profile)
 		browser = Browser(
 			user_data_dir=str(self.profile_dir.resolve()),
 			headless=False,
 			allowed_domains=["co.computrabajo.com"],
 		)
+		llm = MeteredChatBrowserUse(model=os.getenv("JOB_AGENT_BROWSER_MODEL", DEFAULT_BROWSER_MODEL))
 		try:
 			agent = Agent(
-				task=self._build_task(job, profile.model_dump(), saved_draft),
-				llm=ChatBrowserUse(),
+				task=self._build_task(job, profile.model_dump(), saved_draft, known_answers),
+				llm=llm,
 				browser=browser,
 				output_model_schema=ApplicationDraftOutput,
 				use_vision="auto",
 				extend_system_message=(
 					"Complete the user's job application on Computrabajo and submit it when the required fields can be answered "
-					"from the supplied local profile, saved answers, or unambiguous page context. Record every answer actually used. "
-					"Do not invent personal facts, qualifications, employment history, salary facts, legal declarations, or answers "
-					"that are not supported by the supplied data. Never bypass CAPTCHA, 2FA, bot detection, or access controls. "
-					"If such a challenge blocks the application, stop and report it accurately."
+					"from the supplied local profile, deterministic known-answer memory, saved answers, or unambiguous page context. "
+					"Reuse deterministic known answers verbatim when the question is equivalent instead of re-inferring them. "
+					"Record every answer actually used. Do not invent personal facts, qualifications, employment history, salary facts, "
+					"legal declarations, or answers that are not supported by supplied data. Never bypass CAPTCHA, 2FA, bot detection, "
+					"or access controls. If such a challenge blocks the application, stop and report it accurately."
 				),
 			)
-			history = await agent.run(max_steps=70)
+			try:
+				history = await agent.run(max_steps=70)
+			finally:
+				self.usage_store.record(
+					"application",
+					llm.snapshot(),
+					job_id=int(job["id"]),
+					metadata={"title": str(job.get("title") or "")},
+				)
 			output = history.structured_output
 			if output is None:
 				raise RuntimeError(f"No se pudo obtener un resultado estructurado. Resultado: {(history.final_result() or '')[:300]}")
-			return output if isinstance(output, ApplicationDraftOutput) else ApplicationDraftOutput.model_validate(output)
+			result = output if isinstance(output, ApplicationDraftOutput) else ApplicationDraftOutput.model_validate(output)
+			self.answer_memory.remember_questions(
+				[item.model_dump() for item in result.questions],
+				submitted=result.submitted,
+			)
+			return result
 		finally:
 			await browser.stop()
 
 	@staticmethod
-	def _build_task(job: dict[str, object], profile: dict[str, object], saved_draft: dict[str, object]) -> str:
+	def _build_task(
+		job: dict[str, object],
+		profile: dict[str, object],
+		saved_draft: dict[str, object],
+		known_answers: list[dict[str, str]] | None = None,
+	) -> str:
 		return f"""
 Open this Computrabajo vacancy: {job.get('url', '')}
 
 Goal: COMPLETE AND SUBMIT the job application for the user.
 
-Use the local candidate profile and any previously saved draft answers below. A saved answer takes precedence when it clearly corresponds to the same question. Navigate the application flow, fill every answer you can support, continue through intermediate steps, and click the final application/submit/confirm action when the form is ready.
+Use deterministic known answers first, then the local candidate profile and any previously saved draft answers. A saved answer takes precedence when it clearly corresponds to the same question. Do not re-infer an answer already present in deterministic memory. Navigate the application flow, fill every answer you can support, continue through intermediate steps, and click the final application/submit/confirm action when the form is ready.
 
 For every application question or field encountered, record in the final structured output:
 - exact question/label
@@ -165,6 +191,9 @@ For every application question or field encountered, record in the final structu
 - a short note when useful
 
 After the final action, verify whether Computrabajo shows a success/confirmation state. Set submitted=true only when there is positive evidence that the application was submitted. Capture confirmation_text and confirmation_url when available.
+
+Deterministic known-answer memory (reuse only for equivalent questions):
+{known_answers or []}
 
 Local candidate profile:
 {profile}
