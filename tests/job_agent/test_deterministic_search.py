@@ -18,7 +18,7 @@ def test_build_search_url_is_deterministic_and_slugged() -> None:
         "https://co.computrabajo.com/trabajo-de-full-stack-developer"
     )
     assert build_search_url("Python Developer", "Bogotá D.C.") == (
-        "https://co.computrabajo.com/trabajo-de-python-developer-en-bogota-d-c"
+        "https://co.computrabajo.com/trabajo-de-python-developer-en-bogota-dc"
     )
 
 
