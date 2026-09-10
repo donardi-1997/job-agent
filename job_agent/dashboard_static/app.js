@@ -1,5 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 let statusPoll = null;
+let activeJobId = null;
 
 async function fetchJson(url, options = undefined) {
 	const response = await fetch(url, options);
@@ -8,9 +9,10 @@ async function fetchJson(url, options = undefined) {
 	return payload;
 }
 
-function splitCsv(value) {
-	return value.split(',').map((item) => item.trim()).filter(Boolean);
-}
+function splitCsv(value) { return value.split(',').map((item) => item.trim()).filter(Boolean); }
+function escapeHtml(value) { return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;'); }
+function scoreClass(score) { if (score >= 85) return 'score score-high'; if (score >= 75) return 'score score-good'; if (score >= 60) return 'score score-mid'; return 'score score-low'; }
+function decisionLabel(band) { return { ignore: 'Ignorar', save: 'Guardar', recommend: 'Recomendada', prepare: 'Preparar' }[band] || band || '—'; }
 
 function renderStats(stats) {
 	$('#totalMetric').textContent = stats.total ?? 0;
@@ -19,50 +21,65 @@ function renderStats(stats) {
 	$('#avgScoreMetric').textContent = stats.avg_score ?? 0;
 }
 
-function escapeHtml(value) {
-	return String(value ?? '')
-		.replaceAll('&', '&amp;')
-		.replaceAll('<', '&lt;')
-		.replaceAll('>', '&gt;')
-		.replaceAll('"', '&quot;')
-		.replaceAll("'", '&#039;');
-}
-
-function scoreClass(score) {
-	if (score >= 85) return 'score score-high';
-	if (score >= 75) return 'score score-good';
-	if (score >= 60) return 'score score-mid';
-	return 'score score-low';
-}
-
-function decisionLabel(band) {
-	return { ignore: 'Ignorar', save: 'Guardar', recommend: 'Recomendada', prepare: 'Preparar' }[band] || band || '—';
-}
-
 function renderJobs(jobs) {
 	const body = $('#jobsBody');
 	const empty = $('#emptyState');
 	body.innerHTML = '';
-	if (!jobs.length) {
-		empty.classList.remove('hidden');
-		return;
-	}
+	if (!jobs.length) { empty.classList.remove('hidden'); return; }
 	empty.classList.add('hidden');
 	for (const job of jobs) {
 		const row = document.createElement('tr');
-		row.innerHTML = `
-			<td><span class="job-title">${escapeHtml(job.title)}</span><span class="job-company">${escapeHtml(job.company || job.source)}</span></td>
-			<td>${escapeHtml(job.location || 'Sin especificar')}</td>
-			<td><span class="${scoreClass(Number(job.score))}">${escapeHtml(job.score)}</span></td>
-			<td><span class="decision decision-${escapeHtml(job.band)}">${escapeHtml(decisionLabel(job.band))}</span></td>
-			<td><a class="open-link" href="${escapeHtml(job.url)}" target="_blank" rel="noopener noreferrer">Abrir ↗</a></td>`;
+		row.className = 'job-row';
+		row.innerHTML = `<td><span class="job-title">${escapeHtml(job.title)}</span><span class="job-company">${escapeHtml(job.company || job.source)}</span></td><td>${escapeHtml(job.location || 'Sin especificar')}</td><td><span class="${scoreClass(Number(job.score))}">${escapeHtml(job.score)}</span></td><td><span class="decision decision-${escapeHtml(job.band)}">${escapeHtml(decisionLabel(job.band))}</span></td><td><button class="review-link" data-review-job="${job.id}">Revisar →</button></td>`;
 		body.appendChild(row);
 	}
+	body.querySelectorAll('[data-review-job]').forEach((button) => button.addEventListener('click', () => openJob(Number(button.dataset.reviewJob))));
+}
+
+function chips(items, emptyText) {
+	if (!items?.length) return `<span class="empty-chip">${escapeHtml(emptyText)}</span>`;
+	return items.map((item) => `<span class="skill-chip">${escapeHtml(item)}</span>`).join('');
+}
+
+async function openJob(jobId) {
+	try {
+		const job = await fetchJson(`/api/jobs/${jobId}`);
+		activeJobId = jobId;
+		$('#drawerTitle').textContent = job.title;
+		$('#drawerCompany').textContent = [job.company, job.location].filter(Boolean).join(' · ');
+		$('#drawerScore').textContent = `${job.score}%`;
+		$('#drawerDecision').textContent = decisionLabel(job.band);
+		$('#matchedSkills').innerHTML = chips(job.matched_skills, 'No se detectaron coincidencias directas de skills.');
+		$('#missingSkills').innerHTML = chips(job.missing_skills, 'No hay brechas contra las skills configuradas.');
+		$('#matchReasons').innerHTML = (job.match_reasons || []).length ? job.match_reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('') : '<li>Sin razones adicionales registradas.</li>';
+		$('#drawerDescription').textContent = job.description || 'Computrabajo no entregó una descripción para esta vacante.';
+		$('#drawerOpenLink').href = job.url;
+		$('#jobDrawer').classList.add('open');
+		$('#drawerBackdrop').classList.add('open');
+		$('#jobDrawer').setAttribute('aria-hidden', 'false');
+		document.body.classList.add('drawer-open');
+	} catch (error) { console.error('Unable to open job detail', error); }
+}
+
+function closeDrawer() {
+	$('#jobDrawer').classList.remove('open');
+	$('#drawerBackdrop').classList.remove('open');
+	$('#jobDrawer').setAttribute('aria-hidden', 'true');
+	document.body.classList.remove('drawer-open');
+	activeJobId = null;
+}
+
+async function updateJobStatus(status) {
+	if (!activeJobId) return;
+	try {
+		await fetchJson(`/api/jobs/${activeJobId}/status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+		await loadDashboard();
+		closeDrawer();
+	} catch (error) { console.error('Unable to update job status', error); }
 }
 
 function renderSearchStatus(status) {
-	const box = $('#searchStatus');
-	const button = $('#searchButton');
+	const box = $('#searchStatus'); const button = $('#searchButton');
 	box.dataset.state = status.state || 'idle';
 	button.disabled = status.state === 'running';
 	button.textContent = status.state === 'running' ? 'Buscando…' : 'Iniciar búsqueda';
@@ -85,84 +102,42 @@ function renderProfile(profile) {
 }
 
 async function loadDashboard() {
-	const minScore = Number($('#scoreFilter').value || 0);
-	const status = $('#statusFilter').value;
-	const query = new URLSearchParams({ min_score: String(minScore) });
-	if (status) query.set('status', status);
+	const minScore = Number($('#scoreFilter').value || 0); const status = $('#statusFilter').value;
+	const query = new URLSearchParams({ min_score: String(minScore) }); if (status) query.set('status', status);
 	try {
-		const [stats, jobs, searchStatus] = await Promise.all([
-			fetchJson('/api/stats'), fetchJson(`/api/jobs?${query}`), fetchJson('/api/search/status'),
-		]);
-		renderStats(stats);
-		renderJobs(jobs);
-		renderSearchStatus(searchStatus);
-	} catch (error) {
-		console.error('Unable to load dashboard', error);
-	}
+		const [stats, jobs, searchStatus] = await Promise.all([fetchJson('/api/stats'), fetchJson(`/api/jobs?${query}`), fetchJson('/api/search/status')]);
+		renderStats(stats); renderJobs(jobs); renderSearchStatus(searchStatus);
+	} catch (error) { console.error('Unable to load dashboard', error); }
 }
 
-async function loadProfile() {
-	try { renderProfile(await fetchJson('/api/profile')); }
-	catch (error) { $('#profileMessage').textContent = `No se pudo cargar el perfil: ${error.message}`; }
-}
+async function loadProfile() { try { renderProfile(await fetchJson('/api/profile')); } catch (error) { $('#profileMessage').textContent = `No se pudo cargar el perfil: ${error.message}`; } }
 
 async function saveProfile(event) {
-	event.preventDefault();
-	const button = event.submitter;
-	button.disabled = true;
-	$('#profileState').textContent = 'Guardando…';
-	const payload = {
-		target_roles: splitCsv($('#rolesInput').value),
-		skills: splitCsv($('#skillsInput').value),
-		preferred_locations: splitCsv($('#locationsInput').value),
-		years_experience: Number($('#experienceInput').value || 0),
-		min_score: Number($('#minScoreInput').value || 0),
-		prepare_application_score: Number($('#prepareScoreInput').value || 0),
-		excluded_terms: splitCsv($('#excludedInput').value),
-		remote_ok: $('#remoteInput').checked,
-	};
-	try {
-		const profile = await fetchJson('/api/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-		renderProfile(profile);
-		$('#profileState').textContent = 'Guardado';
-		$('#profileMessage').textContent = 'Perfil actualizado. Las próximas vacantes usarán esta configuración.';
-	} catch (error) {
-		$('#profileState').textContent = 'Error';
-		$('#profileMessage').textContent = error.message;
-	} finally { button.disabled = false; }
+	event.preventDefault(); const button = event.submitter; button.disabled = true; $('#profileState').textContent = 'Guardando…';
+	const payload = { target_roles: splitCsv($('#rolesInput').value), skills: splitCsv($('#skillsInput').value), preferred_locations: splitCsv($('#locationsInput').value), years_experience: Number($('#experienceInput').value || 0), min_score: Number($('#minScoreInput').value || 0), prepare_application_score: Number($('#prepareScoreInput').value || 0), excluded_terms: splitCsv($('#excludedInput').value), remote_ok: $('#remoteInput').checked };
+	try { const profile = await fetchJson('/api/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); renderProfile(profile); $('#profileState').textContent = 'Guardado'; $('#profileMessage').textContent = 'Perfil actualizado. Las próximas vacantes usarán esta configuración.'; }
+	catch (error) { $('#profileState').textContent = 'Error'; $('#profileMessage').textContent = error.message; }
+	finally { button.disabled = false; }
 }
 
 async function pollSearchStatus() {
-	try {
-		const status = await fetchJson('/api/search/status');
-		renderSearchStatus(status);
-		if (status.state !== 'running') {
-			if (statusPoll) clearInterval(statusPoll);
-			statusPoll = null;
-			await loadDashboard();
-		}
-	} catch (error) { console.error('Unable to poll search status', error); }
+	try { const status = await fetchJson('/api/search/status'); renderSearchStatus(status); if (status.state !== 'running') { if (statusPoll) clearInterval(statusPoll); statusPoll = null; await loadDashboard(); } }
+	catch (error) { console.error('Unable to poll search status', error); }
 }
 
 async function startSearch(event) {
 	event.preventDefault();
 	const payload = { keyword: $('#keywordInput').value.trim(), location: $('#locationInput').value.trim(), max_results: Number($('#maxResultsInput').value) };
-	try {
-		const status = await fetchJson('/api/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-		renderSearchStatus(status);
-		if (statusPoll) clearInterval(statusPoll);
-		statusPoll = setInterval(pollSearchStatus, 1500);
-	} catch (error) { renderSearchStatus({ state: 'error', message: error.message }); }
+	try { const status = await fetchJson('/api/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); renderSearchStatus(status); if (statusPoll) clearInterval(statusPoll); statusPoll = setInterval(pollSearchStatus, 1500); }
+	catch (error) { renderSearchStatus({ state: 'error', message: error.message }); }
 }
 
 $('#refreshButton').addEventListener('click', () => Promise.all([loadDashboard(), loadProfile()]));
 $('#focusSearchButton').addEventListener('click', () => { $('#search').scrollIntoView({ behavior: 'smooth', block: 'center' }); $('#keywordInput').focus(); });
-$('#searchForm').addEventListener('submit', startSearch);
-$('#profileForm').addEventListener('submit', saveProfile);
-$('#scoreFilter').addEventListener('change', loadDashboard);
-$('#statusFilter').addEventListener('change', loadDashboard);
+$('#searchForm').addEventListener('submit', startSearch); $('#profileForm').addEventListener('submit', saveProfile);
+$('#scoreFilter').addEventListener('change', loadDashboard); $('#statusFilter').addEventListener('change', loadDashboard);
+$('#drawerClose').addEventListener('click', closeDrawer); $('#drawerBackdrop').addEventListener('click', closeDrawer);
+document.querySelectorAll('[data-job-status]').forEach((button) => button.addEventListener('click', () => updateJobStatus(button.dataset.jobStatus)));
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeDrawer(); });
 
-Promise.all([loadDashboard(), loadProfile()]).then(async () => {
-	const status = await fetchJson('/api/search/status').catch(() => null);
-	if (status?.state === 'running') statusPoll = setInterval(pollSearchStatus, 1500);
-});
+Promise.all([loadDashboard(), loadProfile()]).then(async () => { const status = await fetchJson('/api/search/status').catch(() => null); if (status?.state === 'running') statusPoll = setInterval(pollSearchStatus, 1500); });
