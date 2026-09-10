@@ -4,7 +4,12 @@ from types import SimpleNamespace
 import pytest
 
 from browser_use import ChatBrowserUse
-from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse
+from job_agent.ai_usage import (
+    AIUsageBudget,
+    AIUsageBudgetExceeded,
+    AIUsageStore,
+    MeteredChatBrowserUse,
+)
 
 
 def test_metered_browser_use_calculates_bu_2_cost() -> None:
@@ -60,6 +65,41 @@ async def test_usage_listener_receives_each_llm_response_immediately(monkeypatch
     assert all(item.model == "bu-2-0" for item in observed)
     assert all(item.total_tokens == 11_000 for item in observed)
     assert llm.snapshot().total_tokens == 22_000
+
+
+@pytest.mark.asyncio
+async def test_shared_ai_budget_blocks_before_extra_provider_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider_calls = 0
+
+    async def fake_ainvoke(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal provider_calls
+        provider_calls += 1
+        return SimpleNamespace(
+            usage=SimpleNamespace(
+                prompt_tokens=10_000,
+                prompt_cached_tokens=2_000,
+                completion_tokens=1_000,
+            )
+        )
+
+    monkeypatch.setattr(ChatBrowserUse, "ainvoke", fake_ainvoke)
+    budget = AIUsageBudget(max_calls=1, max_cost_usd=1.0)
+    llm = MeteredChatBrowserUse(model="bu-2-0", api_key="test-key", usage_budget=budget)
+
+    await llm.ainvoke([])
+    with pytest.raises(AIUsageBudgetExceeded, match="Presupuesto de IA agotado"):
+        await llm.ainvoke([])
+
+    assert provider_calls == 1
+    assert budget.calls == 1
+    assert budget.estimated_cost_usd > 0
+
+
+def test_zero_ai_budget_disables_provider_before_first_call() -> None:
+    budget = AIUsageBudget(max_calls=0, max_cost_usd=0)
+
+    with pytest.raises(AIUsageBudgetExceeded):
+        budget.before_call()
 
 
 def test_ai_usage_store_summarizes_periods(tmp_path: Path) -> None:
