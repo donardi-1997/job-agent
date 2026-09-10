@@ -3,18 +3,23 @@ from __future__ import annotations
 import os
 
 from dotenv import load_dotenv
+from browser_use import Agent, Browser
 
+from job_agent.ai_usage import AIUsageBudget, MeteredChatBrowserUse, UsageSnapshot
 from job_agent.answer_memory import normalize_question
 from job_agent.computrabajo.application import (
     ApplicationDraftOutput,
     AssistedApplicationPreparer as BaseApplicationPreparer,
+    RealApplicationDraftOutput,
 )
+from job_agent.computrabajo.browser_config import allowed_domains
 from job_agent.computrabajo.deterministic_application import DeterministicApplicationResult
 from job_agent.computrabajo.form_memory import ApplicationFormMemory
 from job_agent.computrabajo.question_resolver import CompactQuestionResolver
 
 
 DEFAULT_COST_AWARE_AI_MAX_STEPS = 18
+DEFAULT_BROWSER_MODEL = "bu-latest"
 
 
 class CostAwareApplicationPreparer(BaseApplicationPreparer):
@@ -117,7 +122,12 @@ class CostAwareApplicationPreparer(BaseApplicationPreparer):
         output = self._from_deterministic(result)
         return output.model_copy(update={"mode": "real", "test_mode": False})
 
-    async def _apply(self, job: dict[str, object]) -> ApplicationDraftOutput:
+    async def _apply(
+        self,
+        job: dict[str, object],
+        *,
+        ai_budget: AIUsageBudget | None = None,
+    ) -> ApplicationDraftOutput:
         load_dotenv()
         profile = self.profile_store.get()
         if not profile.automation_enabled:
@@ -204,6 +214,7 @@ class CostAwareApplicationPreparer(BaseApplicationPreparer):
                     job=job,
                     profile=profile,
                     questions=unresolved,
+                    ai_budget=ai_budget,
                 )
                 replay_draft, resolved_count = self._merge_resolved_answers(saved_draft, local_result, resolutions)
                 if resolved_count:
@@ -283,7 +294,13 @@ class CostAwareApplicationPreparer(BaseApplicationPreparer):
 
         self._last_mode = "ai_fallback"
         try:
-            result = await self._apply_with_ai(job, profile.model_dump(), saved_draft, application_mode)
+            result = await self._apply_with_ai(
+                job,
+                profile.model_dump(),
+                saved_draft,
+                application_mode,
+                ai_budget=ai_budget,
+            )
         except Exception:
             unresolved_count = (
                 sum(1 for item in local_result.questions if item.requires_user_input)
@@ -319,3 +336,84 @@ class CostAwareApplicationPreparer(BaseApplicationPreparer):
                 [item.question for item in result.questions],
             )
         return result
+
+    async def _apply_with_ai(
+        self,
+        job: dict[str, object],
+        profile: dict[str, object],
+        saved_draft: dict[str, object],
+        application_mode: str = "real",
+        *,
+        ai_budget: AIUsageBudget | None = None,
+    ) -> ApplicationDraftOutput:
+        """Rare full-browser fallback, sharing the same batch AI budget."""
+        known_answers = self.answer_memory.context_for_agent(self.profile_store.get())
+        sensitive_credentials = self._sensitive_credentials()
+        browser = Browser(
+            user_data_dir=str(self.profile_dir.resolve()),
+            headless=False,
+            allowed_domains=allowed_domains(),
+        )
+        requested_model = os.getenv("JOB_AGENT_BROWSER_MODEL", DEFAULT_BROWSER_MODEL)
+        job_id = int(job["id"])
+
+        def persist_live_usage(snapshot: UsageSnapshot) -> None:
+            self.usage_store.record_safely(
+                "application",
+                snapshot,
+                job_id=job_id,
+                metadata={
+                    "title": str(job.get("title") or ""),
+                    "mode": "ai_fallback",
+                    "granularity": "llm_invocation",
+                    "requested_model": requested_model,
+                },
+            )
+
+        llm = MeteredChatBrowserUse(
+            model=requested_model,
+            on_usage=persist_live_usage,
+            usage_budget=ai_budget,
+        )
+        try:
+            result_schema = RealApplicationDraftOutput if application_mode == "real" else ApplicationDraftOutput
+            agent = Agent(
+                task=self._build_task(
+                    job,
+                    profile,
+                    saved_draft,
+                    known_answers,
+                    credentials_available=bool(sensitive_credentials),
+                    application_mode=application_mode,
+                ),
+                llm=llm,
+                browser=browser,
+                sensitive_data=sensitive_credentials,
+                output_model_schema=result_schema,
+                use_vision="auto",
+                extend_system_message=(
+                    "Use the full browser agent only for navigation or form structure that the deterministic runner could not handle. "
+                    "Reuse supplied answers verbatim when equivalent. Never invent personal facts. Never bypass CAPTCHA, 2FA, bot "
+                    "detection, or access controls. When finished, call done with exactly one data object containing the complete "
+                    "structured result; all fields belong inside done.data."
+                ),
+            )
+            history = await agent.run(max_steps=self._application_ai_max_steps())
+            output = history.structured_output
+            if output is None:
+                raise RuntimeError(f"No se pudo obtener un resultado estructurado. Resultado: {(history.final_result() or '')[:300]}")
+            result = output if isinstance(output, ApplicationDraftOutput) else ApplicationDraftOutput.model_validate(output)
+            if application_mode == "test":
+                result = self._enforce_test_invariant(result)
+            else:
+                updates: dict[str, object] = {"mode": "real", "test_mode": False}
+                if result.submitted and result.submission_status == "not_submitted":
+                    updates["submission_status"] = "submitted"
+                result = result.model_copy(update=updates)
+            self.answer_memory.remember_questions(
+                [item.model_dump() for item in result.questions],
+                submitted=result.submitted,
+            )
+            return result
+        finally:
+            await browser.stop()
