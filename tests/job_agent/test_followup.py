@@ -1,22 +1,26 @@
+import pytest
+
 from job_agent.followup import ContactTracker, ContactUpdate
 from job_agent.storage import JobRecord, JobStore
 
 
 def _job(store: JobStore, external_id: str, *, status: str = "applied") -> int:
-	store.upsert_jobs([
-		JobRecord(
-			id=None,
-			source="computrabajo",
-			external_id=external_id,
-			title="Backend Developer",
-			company="Example",
-			location="Colombia",
-			url=f"https://co.computrabajo.com/{external_id}",
-			score=90,
-			band="prepare",
-			status=status,
-		)
-	])
+	store.upsert_jobs(
+		[
+			JobRecord(
+				id=None,
+				source="computrabajo",
+				external_id=external_id,
+				title="Backend Developer",
+				company="Example",
+				location="Colombia",
+				url=f"https://co.computrabajo.com/{external_id}",
+				score=90,
+				band="prepare",
+				status=status,
+			)
+		]
+	)
 	return int(store.list_jobs()[0]["id"])
 
 
@@ -25,7 +29,15 @@ def test_contact_followup_is_persisted_for_applied_job(tmp_path):
 	job_id = _job(store, "one")
 	tracker = ContactTracker(store.path)
 
-	saved = tracker.save(job_id, ContactUpdate(status="contacted", channel="WhatsApp", contacted_at="2026-09-10", note="Entrevista inicial"))
+	saved = tracker.save(
+		job_id,
+		ContactUpdate(
+			status="contacted",
+			channel="WhatsApp",
+			contacted_at="2026-09-10",
+			note="Entrevista inicial",
+		),
+	)
 
 	assert saved["status"] == "contacted"
 	assert saved["channel"] == "WhatsApp"
@@ -38,23 +50,19 @@ def test_contact_followup_rejects_non_applied_job(tmp_path):
 	job_id = _job(store, "two", status="saved")
 	tracker = ContactTracker(store.path)
 
-	try:
+	with pytest.raises(ValueError, match="postulada"):
 		tracker.save(job_id, ContactUpdate(status="contacted"))
-		except ValueError as exc:
-		assert "postulada" in str(exc)
-	else:
-		raise AssertionError("Expected non-applied job to be rejected")
 
 
 def test_contact_rate_uses_only_resolved_followups(tmp_path):
 	store = JobStore(tmp_path / "job-agent.db")
 	first = _job(store, "first")
 	second = _job(store, "second")
-	third = _job(store, "third")
+	_job(store, "third")
 	tracker = ContactTracker(store.path)
 	tracker.save(first, ContactUpdate(status="contacted", channel="Email"))
 	tracker.save(second, ContactUpdate(status="no_contact"))
-	# third remains pending and must not dilute the resolved-outcome rate
+	# The third application remains pending and must not dilute the resolved-outcome rate.
 
 	stats = tracker.stats()
 
