@@ -48,6 +48,7 @@ class EnhancedDashboardHandler(DashboardHandler):
 				"cv_control.js",
 				"profile_summary_control.js",
 				"search_plan_control.js",
+				"application_efficiency.js",
 				"contact_tracking.js",
 				"credentials_control.js",
 			):
@@ -77,6 +78,9 @@ class EnhancedDashboardHandler(DashboardHandler):
 		if parsed.path == "/search_plan_control.js":
 			self._send_static("search_plan_control.js", "text/javascript; charset=utf-8")
 			return
+		if parsed.path == "/application_efficiency.js":
+			self._send_static("application_efficiency.js", "text/javascript; charset=utf-8")
+			return
 		if parsed.path == "/api/search/plan":
 			profile = self.profile_store.get()
 			terms = build_personal_search_terms(profile, limit=8)
@@ -90,6 +94,12 @@ class EnhancedDashboardHandler(DashboardHandler):
 			return
 		if parsed.path == "/api/search/efficiency":
 			payload = self.collector.search_efficiency()
+			payload["strategy"] = "deterministic_first"
+			payload["ai_is_fallback"] = True
+			self._send_json(payload)
+			return
+		if parsed.path == "/api/application/efficiency":
+			payload = self.preparer.application_efficiency()
 			payload["strategy"] = "deterministic_first"
 			payload["ai_is_fallback"] = True
 			self._send_json(payload)
