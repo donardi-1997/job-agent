@@ -5,7 +5,10 @@ from dataclasses import dataclass
 
 
 DEFAULT_MIN_MONTHLY_SALARY_COP = 4_000_000
-_ANNUAL_RE = re.compile(r"\b(?:anual|al\s+a[nñ]o|por\s+a[nñ]o)\b", re.IGNORECASE)
+_NON_MONTHLY_RE = re.compile(
+	r"\b(?:anual|annual|yearly|year|al\s+a[nñ]o|por\s+a[nñ]o|hora|hourly|hour|diario|diaria|d[ií]a|daily|day|semanal|semana|weekly|week)\b",
+	re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -77,8 +80,8 @@ def assess_salary_text(text: str, minimum_monthly_salary_cop: int = DEFAULT_MIN_
 		start = max(0, marker.start() - 35)
 		end = min(len(compact), marker.end() + 150)
 		window = compact[start:end]
-		# Do not interpret an explicitly annual amount as a monthly salary.
-		if _ANNUAL_RE.search(window):
+		# Only monthly/unspecified cadence is eligible for this monthly floor.
+		if _NON_MONTHLY_RE.search(window):
 			continue
 		windows.append(window)
 
@@ -88,9 +91,9 @@ def assess_salary_text(text: str, minimum_monthly_salary_cop: int = DEFAULT_MIN_
 		start = max(0, match.start() - 45)
 		end = min(len(compact), match.end() + 70)
 		window = compact[start:end]
-		if _ANNUAL_RE.search(window):
+		if _NON_MONTHLY_RE.search(window):
 			continue
-		if re.search(r"\b(?:mensual|mes|salario|sueldo)\b", window, re.IGNORECASE):
+		if re.search(r"\b(?:mensual|mes|monthly|month|salario|sueldo)\b", window, re.IGNORECASE):
 			windows.append(window)
 
 	candidates: list[tuple[list[int], str]] = []
