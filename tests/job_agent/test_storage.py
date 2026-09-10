@@ -139,3 +139,5 @@ def test_reopen_reconciles_existing_real_submission_evidence(tmp_path: Path) -> 
 	assert store.get_job(job_id)["status"] == "saved"
 	reopened = JobStore(path)
 	assert reopened.get_job(job_id)["status"] == "applied"
+	attempt = reopened.list_application_attempts(job_id)[0]
+	assert attempt["submitted"] is True
