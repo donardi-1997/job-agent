@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from browser_use import Agent, Browser
 from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse
 from job_agent.answer_memory import AnswerMemory
+from job_agent.computrabajo.browser_config import allowed_domains
 from job_agent.profile import ProfileStore
 from job_agent.storage import JobStore
 
@@ -129,7 +130,7 @@ class AssistedApplicationPreparer:
 		browser = Browser(
 			user_data_dir=str(self.profile_dir.resolve()),
 			headless=False,
-			allowed_domains=["co.computrabajo.com"],
+			allowed_domains=allowed_domains(),
 		)
 		llm = MeteredChatBrowserUse(model=os.getenv("JOB_AGENT_BROWSER_MODEL", DEFAULT_BROWSER_MODEL))
 		try:
@@ -145,7 +146,9 @@ class AssistedApplicationPreparer:
 					"Reuse deterministic known answers verbatim when the question is equivalent instead of re-inferring them. "
 					"Record every answer actually used. Do not invent personal facts, qualifications, employment history, salary facts, "
 					"legal declarations, or answers that are not supported by supplied data. Never bypass CAPTCHA, 2FA, bot detection, "
-					"or access controls. If such a challenge blocks the application, stop and report it accurately."
+					"or access controls. If such a challenge blocks the application, stop and report it accurately. "
+					"Google OAuth navigation is allowed only for the user's Computrabajo sign-in. Never change Google account settings, "
+					"security settings, recovery information, or credentials."
 				),
 			)
 			try:
