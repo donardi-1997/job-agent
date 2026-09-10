@@ -18,7 +18,11 @@ from job_agent.profile import UserProfile
 from job_agent.storage import DEFAULT_DB_PATH
 
 
-ALLOWED_APPLICATION_HOSTS = {"co.computrabajo.com", "secure.computrabajo.com"}
+ALLOWED_APPLICATION_HOSTS = {
+    "co.computrabajo.com",
+    "secure.computrabajo.com",
+    "candidato.co.computrabajo.com",
+}
 
 
 @dataclass(frozen=True)
