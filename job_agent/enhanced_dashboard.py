@@ -50,6 +50,7 @@ class EnhancedDashboardHandler(DashboardHandler):
 				"profile_summary_control.js",
 				"search_plan_control.js",
 				"application_efficiency.js",
+				"application_workflow.js",
 				"pagination_control.js",
 				"contact_tracking.js",
 				"credentials_control.js",
@@ -82,6 +83,9 @@ class EnhancedDashboardHandler(DashboardHandler):
 			return
 		if parsed.path == "/application_efficiency.js":
 			self._send_static("application_efficiency.js", "text/javascript; charset=utf-8")
+			return
+		if parsed.path == "/application_workflow.js":
+			self._send_static("application_workflow.js", "text/javascript; charset=utf-8")
 			return
 		if parsed.path == "/pagination_control.js":
 			self._send_static("pagination_control.js", "text/javascript; charset=utf-8")
