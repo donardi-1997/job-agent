@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from browser_use import Agent, Browser
 from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse
+from job_agent.computrabajo.browser_config import allowed_domains
 from job_agent.profile import ProfileStore
 from job_agent.scoring import JobPosting, score_job
 from job_agent.storage import JobRecord, JobStore
@@ -111,7 +112,7 @@ class ComputrabajoCollector:
 		browser = Browser(
 			user_data_dir=str(self.profile_dir.resolve()),
 			headless=False,
-			allowed_domains=["co.computrabajo.com"],
+			allowed_domains=allowed_domains(),
 		)
 		llm = MeteredChatBrowserUse(model=os.getenv("JOB_AGENT_BROWSER_MODEL", DEFAULT_BROWSER_MODEL))
 		try:
@@ -123,7 +124,8 @@ class ComputrabajoCollector:
 				use_vision="auto",
 				extend_system_message=(
 					"This is read-only job discovery. Never apply, submit a form, change account data, send messages, "
-					"or bypass CAPTCHA, 2FA, bot detection, or access controls. Stop if such a challenge blocks discovery."
+					"or bypass CAPTCHA, 2FA, bot detection, or access controls. Stop if such a challenge blocks discovery. "
+					"Google OAuth navigation is allowed only when needed for the user's Computrabajo login; do not alter the Google account."
 				),
 			)
 			try:
