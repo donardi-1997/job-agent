@@ -27,11 +27,11 @@
     panel.id = 'aiUsagePanel';
     panel.className = 'ai-usage-panel';
     panel.innerHTML = `
-      <div class="ai-usage-heading"><div><p class="eyebrow">COSTO DE IA · APRENDIZAJE LOCAL</p><h2>Consumo del agente en pesos colombianos</h2><p>Cada respuesta confirmada alimenta memoria local. La meta es aumentar cobertura determinística y reducir progresivamente las decisiones que necesitan IA.</p><div class="ai-rate" id="aiRate">Tasa USD/COP: cargando…</div></div><span class="safe-pill">COP</span></div>
+      <div class="ai-usage-heading"><div><p class="eyebrow">COSTO DE IA · APRENDIZAJE LOCAL</p><h2>Consumo del agente en pesos colombianos</h2><p>El consumo de Browser Use se registra después de cada respuesta del modelo, incluso mientras una postulación sigue en curso. La meta es aumentar cobertura determinística y reducir progresivamente las llamadas de IA.</p><div class="ai-rate" id="aiRate">Tasa USD/COP: cargando…</div></div><span class="safe-pill">COP</span></div>
       <div class="ai-usage-grid">
-        <article><span>Hoy</span><strong id="aiTodayCost">$0</strong><small id="aiTodayTokens">0 tokens · 0 ejecuciones</small><small id="aiTodayUsd">US$0.0000</small></article>
-        <article><span>Este mes</span><strong id="aiMonthCost">$0</strong><small id="aiMonthTokens">0 tokens · 0 ejecuciones</small><small id="aiMonthUsd">US$0.0000</small></article>
-        <article><span>Total</span><strong id="aiTotalCost">$0</strong><small id="aiTotalTokens">0 tokens · 0 ejecuciones</small><small id="aiTotalUsd">US$0.0000</small></article>
+        <article><span>Hoy</span><strong id="aiTodayCost">$0</strong><small id="aiTodayTokens">0 tokens · 0 llamadas IA</small><small id="aiTodayUsd">US$0.0000</small></article>
+        <article><span>Este mes</span><strong id="aiMonthCost">$0</strong><small id="aiMonthTokens">0 tokens · 0 llamadas IA</small><small id="aiMonthUsd">US$0.0000</small></article>
+        <article><span>Total</span><strong id="aiTotalCost">$0</strong><small id="aiTotalTokens">0 tokens · 0 llamadas IA</small><small id="aiTotalUsd">US$0.0000</small></article>
         <article><span>Memoria determinística</span><strong id="answerMemoryCount">0</strong><small id="answerMemoryUses">0 aprendizajes registrados</small><small class="coverage" id="answerMemoryCoverage">0% cobertura de preguntas conocidas</small></article>
       </div><div class="ai-recent" id="aiRecent"></div>`;
     metrics.insertAdjacentElement('afterend', panel);
@@ -42,13 +42,13 @@
     const today = data.today || {}, month = data.month || {}, total = data.all_time || {}, memory = data.answer_memory || {};
     document.querySelector('#aiTodayCost').textContent = formatCop(today.cost_usd);
     document.querySelector('#aiTodayUsd').textContent = formatUsd(today.cost_usd);
-    document.querySelector('#aiTodayTokens').textContent = `${formatTokens(today.tokens)} tokens · ${today.calls || 0} ejecuciones`;
+    document.querySelector('#aiTodayTokens').textContent = `${formatTokens(today.tokens)} tokens · ${today.calls || 0} llamadas IA`;
     document.querySelector('#aiMonthCost').textContent = formatCop(month.cost_usd);
     document.querySelector('#aiMonthUsd').textContent = formatUsd(month.cost_usd);
-    document.querySelector('#aiMonthTokens').textContent = `${formatTokens(month.tokens)} tokens · ${month.calls || 0} ejecuciones`;
+    document.querySelector('#aiMonthTokens').textContent = `${formatTokens(month.tokens)} tokens · ${month.calls || 0} llamadas IA`;
     document.querySelector('#aiTotalCost').textContent = formatCop(total.cost_usd);
     document.querySelector('#aiTotalUsd').textContent = formatUsd(total.cost_usd);
-    document.querySelector('#aiTotalTokens').textContent = `${formatTokens(total.tokens)} tokens · ${total.calls || 0} ejecuciones`;
+    document.querySelector('#aiTotalTokens').textContent = `${formatTokens(total.tokens)} tokens · ${total.calls || 0} llamadas IA`;
     document.querySelector('#answerMemoryCount').textContent = memory.answers || 0;
     document.querySelector('#answerMemoryUses').textContent = `${memory.learned_questions || 0}/${memory.encountered_questions || 0} preguntas aprendidas · ${memory.submitted_applications || 0} postulaciones exitosas`;
     document.querySelector('#answerMemoryCoverage').textContent = `${Number(memory.answer_coverage_pct || 0).toFixed(1)}% cobertura determinística`;
