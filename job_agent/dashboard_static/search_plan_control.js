@@ -22,6 +22,7 @@
 		if (note) note.insertAdjacentElement('afterend', card);
 		else panel.prepend(card);
 		refresh();
+		window.setInterval(refresh, 5000);
 	}
 
 	async function refresh() {
