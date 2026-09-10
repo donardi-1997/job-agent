@@ -4,7 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from job_agent.config import CandidateProfile, SearchPreferences
 from job_agent.storage import DEFAULT_DB_PATH
@@ -34,6 +34,12 @@ class UserProfile(BaseModel):
 				seen.add(key)
 				cleaned.append(item)
 		return cleaned
+
+	@model_validator(mode="after")
+	def validate_thresholds(self) -> UserProfile:
+		if self.prepare_application_score < self.min_score:
+			raise ValueError("prepare_application_score must be greater than or equal to min_score")
+		return self
 
 	def to_candidate_profile(self) -> CandidateProfile:
 		return CandidateProfile(
