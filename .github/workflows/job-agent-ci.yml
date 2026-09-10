@@ -34,7 +34,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      JOB_AGENT_ZERO_COST: '1'
       BROWSER_USE_API_KEY: ''
 
     steps:
@@ -55,11 +54,9 @@ jobs:
       - name: Compile Job Agent
         run: uv run --no-sync python -m compileall -q job_agent run_job_agent.py
 
-      - name: Verify zero-cost guard configuration
-        shell: bash
-        run: |
-          test "$JOB_AGENT_ZERO_COST" = "1"
-          test -z "$BROWSER_USE_API_KEY"
+      - name: Verify zero-cost provider guard
+        run: uv run --no-sync pytest tests/job_agent/test_ai_usage.py::test_zero_cost_mode_blocks_before_provider_call -q
 
       - name: Run SearchJob tests
-        run: uv run --no-sync pytest tests/job_agent -q
+        shell: bash
+        run: env -u JOB_AGENT_ZERO_COST BROWSER_USE_API_KEY= uv run --no-sync pytest tests/job_agent -q
