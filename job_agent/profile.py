@@ -10,8 +10,18 @@ from job_agent.config import CandidateProfile, SearchPreferences
 from job_agent.storage import DEFAULT_DB_PATH
 
 
+class FrequentAnswer(BaseModel):
+	question: str = Field(min_length=1, max_length=500)
+	answer: str = Field(min_length=1, max_length=4000)
+
+	@field_validator("question", "answer")
+	@classmethod
+	def clean_text(cls, value: str) -> str:
+		return " ".join(value.strip().split())
+
+
 class UserProfile(BaseModel):
-	"""Locally persisted candidate preferences used by scoring and the dashboard."""
+	"""Locally persisted candidate data used by scoring and assisted applications."""
 
 	target_roles: list[str] = Field(default_factory=lambda: ["Python Developer", "Backend Developer"])
 	skills: list[str] = Field(default_factory=lambda: ["Python", "FastAPI", "AWS", "SQL", "Docker"])
@@ -22,7 +32,23 @@ class UserProfile(BaseModel):
 	prepare_application_score: int = Field(default=85, ge=0, le=100)
 	excluded_terms: list[str] = Field(default_factory=lambda: ["english c1", "inglés c1"])
 
-	@field_validator("target_roles", "skills", "preferred_locations", "excluded_terms")
+	# Application-specific facts. Empty means unknown and must never be invented.
+	city: str = Field(default="", max_length=160)
+	english_level: str = Field(default="", max_length=80)
+	salary_expectation: str = Field(default="", max_length=160)
+	availability: str = Field(default="", max_length=160)
+	preferred_work_modes: list[str] = Field(default_factory=lambda: ["Remoto", "Híbrido"])
+	preferred_contract_types: list[str] = Field(default_factory=list)
+	frequent_answers: list[FrequentAnswer] = Field(default_factory=list, max_length=50)
+
+	@field_validator(
+		"target_roles",
+		"skills",
+		"preferred_locations",
+		"excluded_terms",
+		"preferred_work_modes",
+		"preferred_contract_types",
+	)
 	@classmethod
 	def clean_list(cls, values: list[str]) -> list[str]:
 		cleaned: list[str] = []
@@ -34,6 +60,11 @@ class UserProfile(BaseModel):
 				seen.add(key)
 				cleaned.append(item)
 		return cleaned
+
+	@field_validator("city", "english_level", "salary_expectation", "availability")
+	@classmethod
+	def clean_optional_text(cls, value: str) -> str:
+		return " ".join(value.strip().split())
 
 	@model_validator(mode="after")
 	def validate_thresholds(self) -> UserProfile:
