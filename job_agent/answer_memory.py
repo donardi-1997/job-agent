@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import unicodedata
@@ -163,9 +164,57 @@ class AnswerMemory:
                 )
         return context[:limit]
 
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> dict[str, int | float]:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) AS answers, COALESCE(SUM(use_count), 0) AS uses FROM answer_memory"
             ).fetchone()
-        return {"answers": int(row["answers"]), "uses": int(row["uses"])} if row else {"answers": 0, "uses": 0}
+            memory_rows = connection.execute("SELECT question_normalized FROM answer_memory").fetchall()
+            memory_questions = {str(item["question_normalized"]) for item in memory_rows}
+            attempts_table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='application_attempts'"
+            ).fetchone()
+            attempt_rows = (
+                connection.execute("SELECT payload, submitted FROM application_attempts").fetchall()
+                if attempts_table
+                else []
+            )
+
+        encountered: set[str] = set()
+        submitted_applications = 0
+        for attempt in attempt_rows:
+            if bool(attempt["submitted"]):
+                submitted_applications += 1
+            try:
+                payload = json.loads(str(attempt["payload"] or "{}"))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            questions = payload.get("questions") or []
+            if not isinstance(questions, list):
+                continue
+            for item in questions:
+                if not isinstance(item, dict):
+                    continue
+                normalized = normalize_question(str(item.get("question") or ""))
+                if normalized:
+                    encountered.add(normalized)
+
+        learned_encountered = len(encountered & memory_questions)
+        coverage = round((learned_encountered / len(encountered) * 100), 1) if encountered else 0.0
+        return {
+            "answers": int(row["answers"]),
+            "uses": int(row["uses"]),
+            "encountered_questions": len(encountered),
+            "learned_questions": learned_encountered,
+            "answer_coverage_pct": coverage,
+            "submitted_applications": submitted_applications,
+        } if row else {
+            "answers": 0,
+            "uses": 0,
+            "encountered_questions": len(encountered),
+            "learned_questions": learned_encountered,
+            "answer_coverage_pct": coverage,
+            "submitted_applications": submitted_applications,
+        }
