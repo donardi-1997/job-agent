@@ -34,10 +34,22 @@ class UsageSnapshot:
 
 
 class MeteredChatBrowserUse(ChatBrowserUse):
-    """ChatBrowserUse client that accumulates token usage returned by the API."""
+    """ChatBrowserUse client that accumulates token usage returned by the API.
+
+    Browser Use may normalize aliases such as ``bu-latest`` to the concrete
+    backend model exposed by ``self.model``. Job Agent keeps the originally
+    requested model name so metering uses the pricing contract selected by the
+    caller rather than silently switching price tables after initialization.
+    """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        requested_model = kwargs.get("model")
+        if requested_model is None and args and isinstance(args[0], str):
+            requested_model = args[0]
+        self._requested_model = str(requested_model) if requested_model else ""
         super().__init__(*args, **kwargs)
+        if not self._requested_model:
+            self._requested_model = str(self.model)
         self._prompt_tokens = 0
         self._cached_tokens = 0
         self._completion_tokens = 0
@@ -52,7 +64,8 @@ class MeteredChatBrowserUse(ChatBrowserUse):
         return completion
 
     def snapshot(self) -> UsageSnapshot:
-        pricing = MODEL_PRICING_USD_PER_MILLION.get(self.model)
+        model = self._requested_model or str(self.model)
+        pricing = MODEL_PRICING_USD_PER_MILLION.get(model)
         estimated_cost = 0.0
         if pricing:
             input_rate, cached_rate, output_rate = pricing
@@ -64,7 +77,7 @@ class MeteredChatBrowserUse(ChatBrowserUse):
             ) / 1_000_000
         return UsageSnapshot(
             provider=self.provider,
-            model=self.model,
+            model=model,
             prompt_tokens=self._prompt_tokens,
             cached_tokens=self._cached_tokens,
             completion_tokens=self._completion_tokens,
