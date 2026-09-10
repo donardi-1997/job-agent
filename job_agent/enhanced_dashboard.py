@@ -6,13 +6,14 @@ import re
 import webbrowser
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from pydantic import ValidationError
 
 from job_agent.credentials import CredentialStore
 from job_agent.dashboard import DashboardHandler, STATIC_DIR
 from job_agent.followup import ContactTracker, ContactUpdate
+from job_agent.job_pagination import paginate_jobs
 from job_agent.profile import UserProfile
 from job_agent.search_terms import build_personal_search_terms
 
@@ -49,6 +50,7 @@ class EnhancedDashboardHandler(DashboardHandler):
 				"profile_summary_control.js",
 				"search_plan_control.js",
 				"application_efficiency.js",
+				"pagination_control.js",
 				"contact_tracking.js",
 				"credentials_control.js",
 			):
@@ -81,6 +83,9 @@ class EnhancedDashboardHandler(DashboardHandler):
 		if parsed.path == "/application_efficiency.js":
 			self._send_static("application_efficiency.js", "text/javascript; charset=utf-8")
 			return
+		if parsed.path == "/pagination_control.js":
+			self._send_static("pagination_control.js", "text/javascript; charset=utf-8")
+			return
 		if parsed.path == "/api/search/plan":
 			profile = self.profile_store.get()
 			terms = build_personal_search_terms(profile, limit=8)
@@ -104,6 +109,26 @@ class EnhancedDashboardHandler(DashboardHandler):
 			payload["ai_is_fallback"] = True
 			self._send_json(payload)
 			return
+		if parsed.path == "/api/jobs":
+			query = parse_qs(parsed.query)
+			if "page" in query or "page_size" in query:
+				try:
+					page = int(query.get("page", ["1"])[0])
+					page_size = int(query.get("page_size", ["10"])[0])
+					min_score = int(query.get("min_score", ["0"])[0])
+					status = query.get("status", [None])[0] or None
+					payload = paginate_jobs(
+						self.store,
+						page=page,
+						page_size=page_size,
+						min_score=min_score,
+						status=status,
+					)
+				except ValueError as exc:
+					self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+					return
+				self._send_json(payload)
+				return
 		if parsed.path == "/api/currency":
 			rate = _usd_cop_rate()
 			self._send_json({
