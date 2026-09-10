@@ -38,12 +38,41 @@ class WindowsDPAPIProtector:
 		return blob, buffer
 
 	@classmethod
-	def _protect_bytes(cls, payload: bytes) -> bytes:
+	def _windows_apis(cls):
+		if os.name != "nt":
+			raise RuntimeError("Windows DPAPI is only available on Windows.")
 		crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
 		kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+		crypt32.CryptProtectData.argtypes = [
+			ctypes.POINTER(cls._DATA_BLOB),
+			wintypes.LPCWSTR,
+			ctypes.POINTER(cls._DATA_BLOB),
+			ctypes.c_void_p,
+			ctypes.c_void_p,
+			wintypes.DWORD,
+			ctypes.POINTER(cls._DATA_BLOB),
+		]
+		crypt32.CryptProtectData.restype = wintypes.BOOL
+		crypt32.CryptUnprotectData.argtypes = [
+			ctypes.POINTER(cls._DATA_BLOB),
+			ctypes.POINTER(wintypes.LPWSTR),
+			ctypes.POINTER(cls._DATA_BLOB),
+			ctypes.c_void_p,
+			ctypes.c_void_p,
+			wintypes.DWORD,
+			ctypes.POINTER(cls._DATA_BLOB),
+		]
+		crypt32.CryptUnprotectData.restype = wintypes.BOOL
+		kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+		kernel32.LocalFree.restype = wintypes.HLOCAL
+		return crypt32, kernel32
+
+	@classmethod
+	def _protect_bytes(cls, payload: bytes) -> bytes:
+		crypt32, kernel32 = cls._windows_apis()
 		input_blob, input_buffer = cls._to_blob(payload)
 		output_blob = cls._DATA_BLOB()
-		_ = input_buffer  # keep the backing buffer alive for the native call
+		_ = input_buffer
 		ok = crypt32.CryptProtectData(
 			ctypes.byref(input_blob),
 			"Job Agent Computrabajo credentials",
@@ -58,12 +87,11 @@ class WindowsDPAPIProtector:
 		try:
 			return ctypes.string_at(output_blob.pbData, output_blob.cbData)
 		finally:
-			kernel32.LocalFree(output_blob.pbData)
+			kernel32.LocalFree(ctypes.cast(output_blob.pbData, wintypes.HLOCAL))
 
 	@classmethod
 	def _unprotect_bytes(cls, payload: bytes) -> bytes:
-		crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
-		kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+		crypt32, kernel32 = cls._windows_apis()
 		input_blob, input_buffer = cls._to_blob(payload)
 		output_blob = cls._DATA_BLOB()
 		_ = input_buffer
@@ -81,7 +109,7 @@ class WindowsDPAPIProtector:
 		try:
 			return ctypes.string_at(output_blob.pbData, output_blob.cbData)
 		finally:
-			kernel32.LocalFree(output_blob.pbData)
+			kernel32.LocalFree(ctypes.cast(output_blob.pbData, wintypes.HLOCAL))
 
 	def protect(self, value: str) -> str:
 		return base64.b64encode(self._protect_bytes(value.encode("utf-8"))).decode("ascii")
