@@ -49,9 +49,11 @@ def test_paginate_jobs_filters_before_counting_and_paging(tmp_path: Path) -> Non
 
     payload = paginate_jobs(store, page=1, page_size=5, min_score=90, status="saved")
 
-    assert payload["total"] == 5
-    assert payload["pages"] == 1
+    # Scores 100..90 are 11 rows; saved rows are indexes 0,2,4,6,8,10 => 6 total.
+    assert payload["total"] == 6
+    assert payload["pages"] == 2
     assert len(payload["items"]) == 5
+    assert payload["has_next"] is True
     assert all(item["score"] >= 90 for item in payload["items"])
     assert all(item["status"] == "saved" for item in payload["items"])
 
