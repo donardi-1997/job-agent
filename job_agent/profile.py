@@ -21,7 +21,7 @@ class FrequentAnswer(BaseModel):
 
 
 class UserProfile(BaseModel):
-	"""Locally persisted candidate data used by scoring and assisted applications."""
+	"""Locally persisted candidate data used by scoring and automatic applications."""
 
 	target_roles: list[str] = Field(default_factory=lambda: ["Python Developer", "Backend Developer"])
 	skills: list[str] = Field(default_factory=lambda: ["Python", "FastAPI", "AWS", "SQL", "Docker"])
@@ -31,6 +31,7 @@ class UserProfile(BaseModel):
 	min_score: int = Field(default=60, ge=0, le=100)
 	prepare_application_score: int = Field(default=85, ge=0, le=100)
 	excluded_terms: list[str] = Field(default_factory=lambda: ["english c1", "inglés c1"])
+	automation_enabled: bool = True
 
 	# Application-specific facts. Empty means unknown and must never be invented.
 	city: str = Field(default="", max_length=160)
@@ -89,6 +90,7 @@ class UserProfile(BaseModel):
 			min_score=self.min_score,
 			prepare_application_score=self.prepare_application_score,
 			excluded_terms=tuple(self.excluded_terms),
+			auto_submit=self.automation_enabled,
 		)
 
 
