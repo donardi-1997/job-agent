@@ -9,7 +9,8 @@ from job_agent.computrabajo.applications_sync import (
     ComputrabajoApplicationsStore,
     ComputrabajoApplicationsSync,
 )
-from job_agent.enhanced_dashboard import EnhancedDashboardHandler
+from job_agent.computrabajo.eligibility import assess_hard_eligibility
+from job_agent.enhanced_dashboard import EnhancedDashboardHandler, PREPARE_RE
 
 
 APPLICATIONS_STORE = ComputrabajoApplicationsStore(
@@ -68,6 +69,25 @@ class SyncDashboardHandler(EnhancedDashboardHandler):
                 return
             self._send_json(self.applications_sync.status(), HTTPStatus.ACCEPTED)
             return
+
+        # Actual dashboard entry point: enforce the complete hard-eligibility policy
+        # before EnhancedDashboard starts either deterministic or AI browser work.
+        prepare_match = PREPARE_RE.match(parsed.path)
+        if prepare_match:
+            job_id = int(prepare_match.group("job_id"))
+            job = self.store.get_job(job_id)
+            if job:
+                assessment = assess_hard_eligibility(job, self.profile_store.get())
+                if assessment.blocked:
+                    self._send_json(
+                        {
+                            "error": assessment.reason,
+                            "code": assessment.code,
+                            "hard_rule": True,
+                        },
+                        HTTPStatus.CONFLICT,
+                    )
+                    return
 
         # The persistent Chrome profile must not be driven concurrently by a
         # synchronization and another search/application operation.
