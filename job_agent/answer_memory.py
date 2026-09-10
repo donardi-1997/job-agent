@@ -6,7 +6,7 @@ import sqlite3
 import unicodedata
 from pathlib import Path
 
-from job_agent.computrabajo.semantic_answers import (
+from job_agent.semantic_answers import (
     LocalSemanticAnswer,
     LocalSemanticAnswerEngine,
     classify_question,
