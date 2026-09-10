@@ -17,7 +17,7 @@ def main() -> None:
 		print(f"Job Agent cleaned {removed} invalid Computrabajo error-page record(s).")
 
 	# Import after cleanup so dashboard singletons are created against clean data.
-	from job_agent.enhanced_dashboard import run_dashboard
+	from job_agent.sync_dashboard import run_dashboard
 
 	run_dashboard(host=args.host, port=args.port, open_browser=not args.no_browser)
 
