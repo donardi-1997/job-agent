@@ -2,7 +2,7 @@ from pathlib import Path
 
 from job_agent.answer_memory import AnswerMemory
 from job_agent.computrabajo.deterministic_application import ApplicationPatternStore, ObservedField
-from job_agent.computrabajo.semantic_answers import (
+from job_agent.semantic_answers import (
     LocalSemanticAnswerEngine,
     classify_question,
     semantic_similarity,
