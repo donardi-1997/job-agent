@@ -1,6 +1,30 @@
 (() => {
 	let nativeFetch = null;
 
+	function installFetchControls() {
+		if (nativeFetch) return;
+		nativeFetch = window.fetch.bind(window);
+		window.fetch = (input, init) => {
+			const url = typeof input === 'string' ? input : (input?.url || '');
+			const method = String(init?.method || 'GET').toUpperCase();
+			if (method === 'POST' && typeof init?.body === 'string' && (url === '/api/batch' || url === '/api/search')) {
+				try {
+					const payload = JSON.parse(init.body);
+					if (url === '/api/batch') {
+						payload.max_ai_calls = Number(document.querySelector('#batchAiCallsInput')?.value || 0);
+						payload.max_ai_cost_usd = Number(document.querySelector('#batchAiCostInput')?.value || 0);
+					} else {
+						payload.allow_ai_fallback = Boolean(document.querySelector('#searchAiFallbackInput')?.checked);
+					}
+					return nativeFetch(input, { ...init, body: JSON.stringify(payload) });
+				} catch (_) {
+					// Fall through to the original request if the local payload is malformed.
+				}
+			}
+			return nativeFetch(input, init);
+		};
+	}
+
 	function mountBudgetControls() {
 		const form = document.querySelector('#batchForm');
 		const submit = document.querySelector('#batchButton');
@@ -12,32 +36,25 @@
 		cost.innerHTML = 'Máx. gasto IA USD <span>Estimado</span><input id="batchAiCostInput" type="number" min="0" max="10" step="0.01" value="0.10">';
 		form.insertBefore(calls, submit);
 		form.insertBefore(cost, submit);
+	}
 
-		// app.js builds the batch payload. Intercept only this one local POST so the
-		// budget controls can be added without duplicating the batch submission logic.
-		if (!nativeFetch) {
-			nativeFetch = window.fetch.bind(window);
-			window.fetch = (input, init) => {
-				const url = typeof input === 'string' ? input : (input?.url || '');
-				if (url === '/api/batch' && String(init?.method || 'GET').toUpperCase() === 'POST' && typeof init?.body === 'string') {
-					try {
-						const payload = JSON.parse(init.body);
-						payload.max_ai_calls = Number(document.querySelector('#batchAiCallsInput')?.value || 0);
-						payload.max_ai_cost_usd = Number(document.querySelector('#batchAiCostInput')?.value || 0);
-						return nativeFetch(input, { ...init, body: JSON.stringify(payload) });
-					} catch (_) {
-						// Fall through to the original request if the local payload is malformed.
-					}
-				}
-				return nativeFetch(input, init);
-			};
-		}
+	function mountSearchAiOptIn() {
+		const form = document.querySelector('#searchForm');
+		const submit = document.querySelector('#searchButton');
+		if (!form || !submit || document.querySelector('#searchAiFallbackInput')) return;
+		const label = document.createElement('label');
+		label.className = 'toggle-row search-ai-optin';
+		label.title = 'Solo si la extracción local no encuentra resultados. Puede generar costo.';
+		label.innerHTML = '<input id="searchAiFallbackInput" type="checkbox"><span><strong>Permitir IA si falla esta búsqueda</strong><small>Apagado por defecto · la búsqueda local cuesta $0 en IA.</small></span>';
+		form.insertBefore(label, submit);
 	}
 
 	function mount() {
 		const panel = document.querySelector('#batch');
 		if (!panel || document.querySelector('#applicationEfficiency')) return;
 		mountBudgetControls();
+		mountSearchAiOptIn();
+		installFetchControls();
 		const searchPlan = document.querySelector('#automaticSearchPlan');
 		const card = document.createElement('div');
 		card.id = 'applicationEfficiency';
