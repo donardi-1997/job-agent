@@ -13,6 +13,7 @@ from browser_use import Agent, Browser
 from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse
 from job_agent.answer_memory import AnswerMemory
 from job_agent.computrabajo.browser_config import allowed_domains
+from job_agent.credentials import CredentialStore
 from job_agent.profile import ProfileStore
 from job_agent.storage import JobStore
 
@@ -63,6 +64,7 @@ class AssistedApplicationPreparer:
 		self.profile_store = ProfileStore(self.store.path)
 		self.answer_memory = AnswerMemory(self.store.path)
 		self.usage_store = AIUsageStore(self.store.path)
+		self.credential_store = CredentialStore(self.store.path)
 		self.profile_dir = Path(profile_dir)
 		self.profile_dir.mkdir(parents=True, exist_ok=True)
 		self._lock = threading.Lock()
@@ -117,6 +119,17 @@ class AssistedApplicationPreparer:
 			with self._lock:
 				self._status = PreparationStatus(state="error", job_id=job_id, message=str(exc))
 
+	def _sensitive_credentials(self) -> dict[str, dict[str, str]] | None:
+		credentials = self.credential_store.load_computrabajo()
+		if not credentials:
+			return None
+		username, password = credentials
+		secrets = {"computrabajo_user": username, "computrabajo_password": password}
+		return {
+			"https://co.computrabajo.com": secrets,
+			"https://secure.computrabajo.com": secrets,
+		}
+
 	async def _apply(self, job: dict[str, object]) -> ApplicationDraftOutput:
 		load_dotenv()
 		if not os.getenv("BROWSER_USE_API_KEY"):
@@ -127,6 +140,7 @@ class AssistedApplicationPreparer:
 			raise RuntimeError("La automatización está desactivada. No se inició una nueva postulación.")
 		saved_draft = self.store.get_application_draft(int(job["id"])) or {}
 		known_answers = self.answer_memory.context_for_agent(profile)
+		sensitive_credentials = self._sensitive_credentials()
 		browser = Browser(
 			user_data_dir=str(self.profile_dir.resolve()),
 			headless=False,
@@ -135,20 +149,28 @@ class AssistedApplicationPreparer:
 		llm = MeteredChatBrowserUse(model=os.getenv("JOB_AGENT_BROWSER_MODEL", DEFAULT_BROWSER_MODEL))
 		try:
 			agent = Agent(
-				task=self._build_task(job, profile.model_dump(), saved_draft, known_answers),
+				task=self._build_task(
+					job,
+					profile.model_dump(),
+					saved_draft,
+					known_answers,
+					credentials_available=bool(sensitive_credentials),
+				),
 				llm=llm,
 				browser=browser,
+				sensitive_data=sensitive_credentials,
 				output_model_schema=ApplicationDraftOutput,
 				use_vision="auto",
 				extend_system_message=(
 					"Complete the user's job application on Computrabajo and submit it when the required fields can be answered "
 					"from the supplied local profile, deterministic known-answer memory, saved answers, or unambiguous page context. "
 					"Reuse deterministic known answers verbatim when the question is equivalent instead of re-inferring them. "
-					"Record every answer actually used. Do not invent personal facts, qualifications, employment history, salary facts, "
-					"legal declarations, or answers that are not supported by supplied data. Never bypass CAPTCHA, 2FA, bot detection, "
-					"or access controls. If such a challenge blocks the application, stop and report it accurately. "
-					"Google OAuth navigation is allowed only for the user's Computrabajo sign-in. Never change Google account settings, "
-					"security settings, recovery information, or credentials."
+					"When sensitive_data placeholders are available, use them only in native Computrabajo login fields and never reveal "
+					"or repeat their values. Record every non-secret application answer actually used. Do not invent personal facts, "
+					"qualifications, employment history, salary facts, legal declarations, or answers that are not supported by supplied "
+					"data. Never bypass CAPTCHA, 2FA, bot detection, or access controls. If such a challenge blocks the application, stop "
+					"and report it accurately. Google OAuth navigation is allowed only for the user's Computrabajo sign-in. Never change "
+					"Google account settings, security settings, recovery information, or credentials."
 				),
 			)
 			try:
@@ -178,13 +200,23 @@ class AssistedApplicationPreparer:
 		profile: dict[str, object],
 		saved_draft: dict[str, object],
 		known_answers: list[dict[str, str]] | None = None,
+		*,
+		credentials_available: bool = False,
 	) -> str:
+		login_instruction = (
+			"If Computrabajo requires native login, use the sensitive placeholders <secret>computrabajo_user</secret> and "
+			"<secret>computrabajo_password</secret> only in the appropriate Computrabajo login fields. Never output their values."
+			if credentials_available
+			else "If login is required and the persistent browser session is not authenticated, report login_required=true."
+		)
 		return f"""
 Open this Computrabajo vacancy: {job.get('url', '')}
 
 Goal: COMPLETE AND SUBMIT the job application for the user.
 
 Use deterministic known answers first, then the local candidate profile and any previously saved draft answers. A saved answer takes precedence when it clearly corresponds to the same question. Do not re-infer an answer already present in deterministic memory. Navigate the application flow, fill every answer you can support, continue through intermediate steps, and click the final application/submit/confirm action when the form is ready.
+
+{login_instruction}
 
 For every application question or field encountered, record in the final structured output:
 - exact question/label
@@ -194,6 +226,8 @@ For every application question or field encountered, record in the final structu
 - confidence 0-100
 - requires_user_input=false when it was completed successfully
 - a short note when useful
+
+Never include passwords, authentication tokens, secret placeholders, or login credentials in the application-question output.
 
 After the final action, verify whether Computrabajo shows a success/confirmation state. Set submitted=true only when there is positive evidence that the application was submitted. Capture confirmation_text and confirmation_url when available.
 
