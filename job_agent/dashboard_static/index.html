@@ -15,24 +15,24 @@
 			</div>
 			<nav>
 				<a class="nav-item active" href="#dashboard">Dashboard</a>
+				<a class="nav-item" href="#search">Buscar</a>
 				<a class="nav-item" href="#jobs">Vacantes</a>
 				<a class="nav-item" href="#applications">Postulaciones</a>
 				<a class="nav-item" href="#profile">Perfil</a>
-				<a class="nav-item" href="#settings">Configuración</a>
 			</nav>
 			<div class="local-badge"><span class="dot"></span> Ejecutando localmente</div>
 		</aside>
 
-		<main class="content">
+		<main class="content" id="dashboard">
 			<header class="topbar">
 				<div>
 					<p class="eyebrow">COMPUTRABAJO AGENT</p>
 					<h1>Centro de búsqueda laboral</h1>
-					<p class="subtitle">Encuentra, prioriza y controla tus postulaciones desde un solo lugar.</p>
+					<p class="subtitle">Busca vacantes reales, priorízalas por compatibilidad y conserva todo el historial en tu computador.</p>
 				</div>
 				<div class="actions">
 					<button class="button secondary" id="refreshButton">Actualizar</button>
-					<button class="button primary" disabled title="Se habilitará al conectar el collector">Buscar vacantes</button>
+					<button class="button primary" id="focusSearchButton">Buscar vacantes</button>
 				</div>
 			</header>
 
@@ -41,6 +41,35 @@
 				<article class="metric-card"><span>Match alto</span><strong id="highMatchMetric">0</strong><small>Score ≥ 85</small></article>
 				<article class="metric-card"><span>Postuladas</span><strong id="appliedMetric">0</strong><small>Historial</small></article>
 				<article class="metric-card"><span>Score promedio</span><strong id="avgScoreMetric">0</strong><small>Compatibilidad</small></article>
+			</section>
+
+			<section class="search-panel" id="search">
+				<div>
+					<p class="eyebrow">NUEVA BÚSQUEDA</p>
+					<h2>Buscar en Computrabajo</h2>
+					<p>Browser Use abrirá un navegador local visible, recorrerá Computrabajo y guardará los resultados automáticamente.</p>
+				</div>
+				<form id="searchForm" class="search-form">
+					<label>Cargo o palabra clave
+						<input id="keywordInput" name="keyword" value="Python Developer" minlength="2" maxlength="120" required>
+					</label>
+					<label>Ubicación
+						<input id="locationInput" name="location" value="Colombia" minlength="2" maxlength="120" required>
+					</label>
+					<label>Máximo de resultados
+						<select id="maxResultsInput" name="max_results">
+							<option value="10">10</option>
+							<option value="20" selected>20</option>
+							<option value="30">30</option>
+							<option value="50">50</option>
+						</select>
+					</label>
+					<button class="button primary search-submit" id="searchButton" type="submit">Iniciar búsqueda</button>
+				</form>
+				<div class="search-status" id="searchStatus" data-state="idle">
+					<span class="status-indicator"></span>
+					<div><strong id="searchStatusTitle">Agente listo</strong><span id="searchStatusMessage">Configura tu búsqueda y ejecútala cuando quieras.</span></div>
+				</div>
 			</section>
 
 			<section class="panel" id="jobs">
@@ -67,7 +96,7 @@
 					<div class="empty" id="emptyState">
 						<div class="empty-icon">◎</div>
 						<h3>Aún no hay vacantes</h3>
-						<p>Cuando conectemos el collector de Computrabajo, los resultados aparecerán aquí automáticamente.</p>
+						<p>Ejecuta tu primera búsqueda. Los resultados encontrados por Browser Use aparecerán aquí automáticamente.</p>
 					</div>
 				</div>
 			</section>
