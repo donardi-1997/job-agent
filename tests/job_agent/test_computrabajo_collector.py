@@ -51,6 +51,42 @@ def test_persist_deduplicates_jobs_and_uses_local_profile(tmp_path: Path) -> Non
 	assert jobs[0]["band"] == "prepare"
 
 
+def test_rescore_existing_jobs_uses_professional_summary_and_preserves_status(tmp_path: Path) -> None:
+	store = JobStore(tmp_path / "jobs.db")
+	collector = ComputrabajoCollector(store=store, profile_dir=tmp_path / "browser-profile")
+	collector.profile_store.save(
+		UserProfile(
+			target_roles=["Python Developer"],
+			skills=["Python", "FastAPI", "AWS"],
+			preferred_locations=["Colombia"],
+		)
+	)
+	job = ExtractedJob(
+		title="Python Developer",
+		company="Example SAS",
+		location="Bogotá, Colombia",
+		description="Backend role using Python, FastAPI and AWS.",
+		url="https://co.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-python-developer-en-bogota-dc-RESCORE1",
+	)
+	collector._persist([job])
+	before = store.list_jobs()[0]
+	store.update_status(int(before["id"]), "applied")
+
+	current = collector.profile_store.get()
+	collector.profile_store.save(
+		current.model_copy(
+			update={"professional_summary": "Java Angular frontend mobile Kotlin Android UI design"}
+		)
+	)
+	assert collector.rescore_existing_jobs() == 1
+
+	after = store.get_job(int(before["id"]))
+	assert after is not None
+	assert int(after["score"]) < int(before["score"])
+	assert after["status"] == "applied"
+	assert any("Professional context matches" in reason for reason in after["match_reasons"])
+
+
 def test_task_is_read_only() -> None:
 	task = ComputrabajoCollector._build_task(SearchRequest(keyword="AWS Developer", location="Colombia"))
 
