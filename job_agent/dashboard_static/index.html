@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="es">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Job Agent</title>
+	<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+	<div class="app-shell">
+		<aside class="sidebar">
+			<div class="brand">
+				<div class="brand-mark">JA</div>
+				<div><strong>Job Agent</strong><span>Local workspace</span></div>
+			</div>
+			<nav>
+				<a class="nav-item active" href="#dashboard">Dashboard</a>
+				<a class="nav-item" href="#jobs">Vacantes</a>
+				<a class="nav-item" href="#applications">Postulaciones</a>
+				<a class="nav-item" href="#profile">Perfil</a>
+				<a class="nav-item" href="#settings">Configuración</a>
+			</nav>
+			<div class="local-badge"><span class="dot"></span> Ejecutando localmente</div>
+		</aside>
+
+		<main class="content">
+			<header class="topbar">
+				<div>
+					<p class="eyebrow">COMPUTRABAJO AGENT</p>
+					<h1>Centro de búsqueda laboral</h1>
+					<p class="subtitle">Encuentra, prioriza y controla tus postulaciones desde un solo lugar.</p>
+				</div>
+				<div class="actions">
+					<button class="button secondary" id="refreshButton">Actualizar</button>
+					<button class="button primary" disabled title="Se habilitará al conectar el collector">Buscar vacantes</button>
+				</div>
+			</header>
+
+			<section class="metrics" aria-label="Resumen">
+				<article class="metric-card"><span>Vacantes encontradas</span><strong id="totalMetric">0</strong><small>Base local</small></article>
+				<article class="metric-card"><span>Match alto</span><strong id="highMatchMetric">0</strong><small>Score ≥ 85</small></article>
+				<article class="metric-card"><span>Postuladas</span><strong id="appliedMetric">0</strong><small>Historial</small></article>
+				<article class="metric-card"><span>Score promedio</span><strong id="avgScoreMetric">0</strong><small>Compatibilidad</small></article>
+			</section>
+
+			<section class="panel" id="jobs">
+				<div class="panel-header">
+					<div><h2>Vacantes priorizadas</h2><p>Ordenadas automáticamente por compatibilidad con tu perfil.</p></div>
+					<div class="filters">
+						<label>Score mínimo <input id="scoreFilter" type="number" min="0" max="100" value="0"></label>
+						<label>Estado
+							<select id="statusFilter">
+								<option value="">Todos</option>
+								<option value="discovered">Descubierta</option>
+								<option value="saved">Guardada</option>
+								<option value="applied">Postulada</option>
+							</select>
+						</label>
+					</div>
+				</div>
+
+				<div class="table-wrap">
+					<table>
+						<thead><tr><th>Vacante</th><th>Ubicación</th><th>Score</th><th>Estado</th><th></th></tr></thead>
+						<tbody id="jobsBody"></tbody>
+					</table>
+					<div class="empty" id="emptyState">
+						<div class="empty-icon">◎</div>
+						<h3>Aún no hay vacantes</h3>
+						<p>Cuando conectemos el collector de Computrabajo, los resultados aparecerán aquí automáticamente.</p>
+					</div>
+				</div>
+			</section>
+		</main>
+	</div>
+	<script src="/app.js"></script>
+</body>
+</html>
