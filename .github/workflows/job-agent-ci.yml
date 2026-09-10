@@ -35,9 +35,6 @@ jobs:
     timeout-minutes: 15
     env:
       JOB_AGENT_ZERO_COST: '1'
-      JOB_AGENT_SEARCH_AI_FALLBACK: '0'
-      JOB_AGENT_QUESTION_LLM: '0'
-      JOB_AGENT_APPLICATION_AI_FALLBACK: '0'
       BROWSER_USE_API_KEY: ''
 
     steps:
@@ -62,9 +59,6 @@ jobs:
         shell: bash
         run: |
           test "$JOB_AGENT_ZERO_COST" = "1"
-          test "$JOB_AGENT_SEARCH_AI_FALLBACK" = "0"
-          test "$JOB_AGENT_QUESTION_LLM" = "0"
-          test "$JOB_AGENT_APPLICATION_AI_FALLBACK" = "0"
           test -z "$BROWSER_USE_API_KEY"
 
       - name: Run SearchJob tests
