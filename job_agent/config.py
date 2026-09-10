@@ -21,7 +21,7 @@ class SearchPreferences:
 	max_required_experience_years: int = 5
 	excluded_terms: tuple[str, ...] = ("english c1", "inglés c1")
 	auto_fill: bool = True
-	auto_submit: bool = False
+	auto_submit: bool = True
 
 	def __post_init__(self) -> None:
 		if not 0 <= self.min_score <= 100:
