@@ -36,3 +36,57 @@ def test_excluded_c1_requirement_is_ignored() -> None:
 
 	assert result.score == 0
 	assert result.decision == "ignore"
+
+
+def test_professional_summary_contributes_fifteen_percent_without_ai() -> None:
+	profile = CandidateProfile(
+		target_roles=("backend developer",),
+		skills=("python", "fastapi", "aws"),
+		preferred_locations=("Colombia",),
+		professional_summary=(
+			"Backend especializado en Python FastAPI AWS Lambda API Gateway Bedrock RAG, "
+			"automatización e integraciones API."
+		),
+	)
+	job = JobPosting(
+		title="Backend Developer",
+		company="Example",
+		location="Bogotá, Colombia",
+		description="Python FastAPI backend on AWS using Lambda, API Gateway, Bedrock and RAG.",
+		url="https://example.test/job/3",
+	)
+
+	result = score_job(job, profile, SearchPreferences())
+
+	assert result.score >= 90
+	assert result.decision == "prepare"
+	assert any("Professional context matches" in reason for reason in result.reasons)
+	assert any("Context overlap" in reason for reason in result.reasons)
+
+
+def test_professional_summary_distinguishes_contextually_unrelated_jobs() -> None:
+	profile = CandidateProfile(
+		target_roles=("software engineer",),
+		skills=("python",),
+		preferred_locations=("Colombia",),
+		professional_summary="AWS Lambda FastAPI Python RAG Bedrock APIs backend cloud automation",
+	)
+	relevant = JobPosting(
+		title="Software Engineer",
+		company="Example",
+		location="Colombia",
+		description="Build Python FastAPI APIs on AWS Lambda and Bedrock for RAG automation.",
+		url="https://example.test/job/relevant",
+	)
+	unrelated = JobPosting(
+		title="Software Engineer",
+		company="Example",
+		location="Colombia",
+		description="Maintain legacy desktop UI applications and manual reporting workflows.",
+		url="https://example.test/job/unrelated",
+	)
+
+	relevant_result = score_job(relevant, profile, SearchPreferences())
+	unrelated_result = score_job(unrelated, profile, SearchPreferences())
+
+	assert relevant_result.score > unrelated_result.score
