@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from browser_use import Agent, Browser
-from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse
+from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse, UsageSnapshot
 from job_agent.computrabajo.browser_config import allowed_domains
 from job_agent.computrabajo.deterministic import DeterministicComputrabajoSearch, SearchExecutionStore
 from job_agent.profile import ProfileStore
@@ -197,7 +197,23 @@ class ComputrabajoCollector:
 			headless=False,
 			allowed_domains=allowed_domains(),
 		)
-		llm = MeteredChatBrowserUse(model=os.getenv("JOB_AGENT_BROWSER_MODEL", DEFAULT_BROWSER_MODEL))
+		requested_model = os.getenv("JOB_AGENT_BROWSER_MODEL", DEFAULT_BROWSER_MODEL)
+
+		def persist_live_usage(snapshot: UsageSnapshot) -> None:
+			self.usage_store.record_safely(
+				"search",
+				snapshot,
+				metadata={
+					"keyword": request.keyword,
+					"location": request.location,
+					"mode": "ai_fallback",
+					"fallback_reason": self._last_fallback_reason,
+					"granularity": "llm_invocation",
+					"requested_model": requested_model,
+				},
+			)
+
+		llm = MeteredChatBrowserUse(model=requested_model, on_usage=persist_live_usage)
 		try:
 			agent = Agent(
 				task=self._build_task(request),
@@ -211,19 +227,7 @@ class ComputrabajoCollector:
 					"Google OAuth navigation is allowed only when needed for the user's Computrabajo login; do not alter the Google account."
 				),
 			)
-			try:
-				history = await agent.run(max_steps=60)
-			finally:
-				self.usage_store.record_safely(
-					"search",
-					llm.snapshot(),
-					metadata={
-						"keyword": request.keyword,
-						"location": request.location,
-						"mode": "ai_fallback",
-						"fallback_reason": self._last_fallback_reason,
-					},
-				)
+			history = await agent.run(max_steps=60)
 			output = history.structured_output
 			if output is None:
 				raise RuntimeError(f"Browser Use no devolvió vacantes estructuradas. Resultado: {(history.final_result() or '')[:300]}")
