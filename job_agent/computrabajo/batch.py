@@ -10,11 +10,12 @@ from pydantic import BaseModel, Field, field_validator
 from job_agent.computrabajo.application import AssistedApplicationPreparer
 from job_agent.computrabajo.collector import ComputrabajoCollector, SearchRequest
 from job_agent.profile import ProfileStore
+from job_agent.search_terms import build_personal_search_terms
 from job_agent.storage import JobStore
 
 
 class BatchApplyRequest(BaseModel):
-	"""Personal batch settings. Search roles come primarily from the local profile."""
+	"""Personal batch settings. Search terms are derived from local skills and roles."""
 
 	keyword: str = Field(default="", max_length=120)
 	location: str = Field(default="Colombia", min_length=2, max_length=120)
@@ -49,7 +50,7 @@ class BatchApplyStatus(BaseModel):
 
 
 class BatchApplyRunner:
-	"""Runs personalized multi-query discovery and sequential auto-application."""
+	"""Runs skill-driven multi-query discovery and sequential auto-application."""
 
 	def __init__(
 		self,
@@ -84,12 +85,13 @@ class BatchApplyRunner:
 
 	def _search_terms(self, request: BatchApplyRequest) -> list[str]:
 		profile = self.profile_store.get()
-		values = list(profile.target_roles)
-		if request.keyword:
-			values.append(request.keyword)
-		terms = self._unique_terms(values, request.max_search_terms)
+		terms = build_personal_search_terms(
+			profile,
+			custom_term=request.keyword,
+			limit=request.max_search_terms,
+		)
 		if not terms:
-			raise ValueError("Configura al menos un cargo objetivo en Mi perfil.")
+			raise ValueError("Agrega skills o cargos objetivo en Mi perfil para construir búsquedas automáticas.")
 		return terms
 
 	def start(self, request: BatchApplyRequest) -> bool:
@@ -110,7 +112,7 @@ class BatchApplyRunner:
 				keyword=label,
 				search_terms=search_terms,
 				location=request.location,
-				message=f"Buscando en {len(search_terms)} cargos objetivo de tu perfil…",
+				message=f"Construí {len(search_terms)} búsquedas automáticas desde tus skills y cargos objetivo…",
 			)
 		threading.Thread(
 			target=self._worker,
@@ -202,7 +204,7 @@ class BatchApplyRunner:
 
 			if quota == 0:
 				message = (
-					f"Se revisaron {searches_completed} búsquedas de tu perfil y no hay vacantes nuevas "
+					f"Se revisaron {searches_completed} búsquedas generadas desde tu perfil y no hay vacantes nuevas "
 					"que cumplan el umbral y la cuota configurados."
 				)
 				self.store.update_batch_run(run_id, state="completed", message=message)
@@ -243,7 +245,7 @@ class BatchApplyRunner:
 					break
 
 			message = (
-				f"Lote personal finalizado: {searches_completed} búsquedas, {len(found_urls)} vacantes únicas, "
+				f"Lote personal finalizado: {searches_completed} búsquedas automáticas, {len(found_urls)} vacantes únicas, "
 				f"{submitted} enviadas de {attempted} intentos."
 			)
 			self.store.update_batch_run(
