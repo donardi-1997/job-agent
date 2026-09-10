@@ -15,10 +15,12 @@ from job_agent.dashboard import DashboardHandler, STATIC_DIR
 from job_agent.followup import ContactTracker, ContactUpdate
 from job_agent.job_pagination import paginate_jobs
 from job_agent.profile import UserProfile
+from job_agent.salary_policy import assess_job_salary
 from job_agent.search_terms import build_personal_search_terms
 
 
 CONTACT_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/contact$")
+PREPARE_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/prepare$")
 CONTACT_TRACKER = ContactTracker(DashboardHandler.store.path)
 CREDENTIAL_STORE = CredentialStore(DashboardHandler.store.path)
 DEFAULT_USD_COP_RATE = 4000.0
@@ -48,6 +50,7 @@ class EnhancedDashboardHandler(DashboardHandler):
 				"automation_control.js",
 				"cv_control.js",
 				"profile_summary_control.js",
+				"salary_policy_control.js",
 				"search_plan_control.js",
 				"application_efficiency.js",
 				"application_workflow.js",
@@ -83,6 +86,9 @@ class EnhancedDashboardHandler(DashboardHandler):
 		if parsed.path == "/profile_summary_control.js":
 			self._send_static("profile_summary_control.js", "text/javascript; charset=utf-8")
 			return
+		if parsed.path == "/salary_policy_control.js":
+			self._send_static("salary_policy_control.js", "text/javascript; charset=utf-8")
+			return
 		if parsed.path == "/search_plan_control.js":
 			self._send_static("search_plan_control.js", "text/javascript; charset=utf-8")
 			return
@@ -100,6 +106,14 @@ class EnhancedDashboardHandler(DashboardHandler):
 			return
 		if parsed.path == "/pagination_control.js":
 			self._send_static("pagination_control.js", "text/javascript; charset=utf-8")
+			return
+		if parsed.path == "/api/profile/min-salary":
+			profile = self.profile_store.get()
+			self._send_json({
+				"min_monthly_salary_cop": profile.min_monthly_salary_cop,
+				"hard_rule": True,
+				"unknown_salary_is_allowed": True,
+			})
 			return
 		if parsed.path == "/api/search/plan":
 			profile = self.profile_store.get()
@@ -171,6 +185,26 @@ class EnhancedDashboardHandler(DashboardHandler):
 
 	def do_POST(self) -> None:  # noqa: N802
 		parsed = urlparse(self.path)
+		if parsed.path == "/api/profile/min-salary":
+			try:
+				body = self._read_json()
+				raw = body.get("min_monthly_salary_cop")
+				if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+					raise ValueError("min_monthly_salary_cop must be a number")
+				value = int(raw)
+				current = self.profile_store.get()
+				profile = UserProfile.model_validate({**current.model_dump(), "min_monthly_salary_cop": value})
+				self.profile_store.save(profile)
+				rescored = self.collector.rescore_existing_jobs()
+				self._send_json({
+					"min_monthly_salary_cop": profile.min_monthly_salary_cop,
+					"hard_rule": True,
+					"unknown_salary_is_allowed": True,
+					"rescored_jobs": rescored,
+				})
+			except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+				self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+			return
 		if parsed.path == "/api/profile/summary":
 			try:
 				body = self._read_json()
@@ -196,6 +230,7 @@ class EnhancedDashboardHandler(DashboardHandler):
 				current = self.profile_store.get()
 				body.setdefault("automation_enabled", current.automation_enabled)
 				body.setdefault("professional_summary", current.professional_summary)
+				body.setdefault("min_monthly_salary_cop", current.min_monthly_salary_cop)
 				profile = UserProfile.model_validate(body)
 				saved = self.profile_store.save(profile)
 				self.collector.rescore_existing_jobs()
@@ -231,6 +266,23 @@ class EnhancedDashboardHandler(DashboardHandler):
 			except (ValidationError, ValueError, json.JSONDecodeError) as exc:
 				self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 			return
+
+		# Defense in depth for one-off/manual application actions. Batch eligibility
+		# enforces the same rule separately, so neither path can spend browser/LLM
+		# work on a vacancy that is explicitly below the salary floor.
+		match = PREPARE_RE.match(parsed.path)
+		if match:
+			job = self.store.get_job(int(match.group("job_id")))
+			if job:
+				profile = self.profile_store.get()
+				salary = assess_job_salary(job, profile.min_monthly_salary_cop)
+				if salary.blocked:
+					self._send_json({
+						"error": salary.reason,
+						"code": "salary_below_minimum",
+						"min_monthly_salary_cop": profile.min_monthly_salary_cop,
+					}, HTTPStatus.CONFLICT)
+					return
 		super().do_POST()
 
 
