@@ -14,6 +14,7 @@ from browser_use import Agent, Browser
 from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse, UsageSnapshot
 from job_agent.computrabajo.browser_config import allowed_domains
 from job_agent.computrabajo.deterministic import DeterministicComputrabajoSearch, SearchExecutionStore
+from job_agent.computrabajo.job_validation import is_valid_computrabajo_job
 from job_agent.profile import ProfileStore
 from job_agent.scoring import JobPosting, score_job
 from job_agent.storage import JobRecord, JobStore
@@ -144,6 +145,21 @@ class ComputrabajoCollector:
 			# Telemetry must never break job discovery.
 			pass
 
+	@staticmethod
+	def _valid_jobs(jobs: list[ExtractedJob], limit: int | None = None) -> list[ExtractedJob]:
+		valid: list[ExtractedJob] = []
+		for item in jobs:
+			if not is_valid_computrabajo_job(
+				title=item.title,
+				url=str(item.url),
+				description=item.description,
+			):
+				continue
+			valid.append(item)
+			if limit is not None and len(valid) >= limit:
+				break
+		return valid
+
 	async def _collect(self, request: SearchRequest) -> SearchOutput:
 		"""Try deterministic Chrome/CDP extraction, then optionally fall back to Browser Use AI."""
 		load_dotenv()
@@ -169,10 +185,12 @@ class ComputrabajoCollector:
 						for job in deterministic.jobs
 					]
 				)
-				self._last_collection_mode = "deterministic"
-				self._record_search_execution(request, "deterministic", len(output.jobs))
-				return output
-			fallback_reason = deterministic.reason or "La extracción determinística no devolvió vacantes."
+				output = SearchOutput(jobs=self._valid_jobs(output.jobs, request.max_results))
+				if output.jobs:
+					self._last_collection_mode = "deterministic"
+					self._record_search_execution(request, "deterministic", len(output.jobs))
+					return output
+			fallback_reason = deterministic.reason or "La extracción determinística no devolvió vacantes válidas."
 		except Exception as exc:
 			fallback_reason = f"{type(exc).__name__}: {exc}"
 
@@ -231,7 +249,8 @@ class ComputrabajoCollector:
 			output = history.structured_output
 			if output is None:
 				raise RuntimeError(f"Browser Use no devolvió vacantes estructuradas. Resultado: {(history.final_result() or '')[:300]}")
-			return output if isinstance(output, SearchOutput) else SearchOutput.model_validate(output)
+			normalized = output if isinstance(output, SearchOutput) else SearchOutput.model_validate(output)
+			return SearchOutput(jobs=self._valid_jobs(normalized.jobs, request.max_results))
 		finally:
 			await browser.stop()
 
@@ -293,7 +312,7 @@ Return only actual vacancies on co.computrabajo.com.
 
 	def _persist(self, jobs: list[ExtractedJob]) -> int:
 		records: list[JobRecord] = []
-		for item in jobs:
+		for item in self._valid_jobs(jobs):
 			url = str(item.url)
 			records.append(
 				self._record_for_job(
@@ -313,6 +332,12 @@ Return only actual vacancies on co.computrabajo.com.
 		records: list[JobRecord] = []
 		for job in jobs:
 			if str(job.get("source") or "") != "computrabajo":
+				continue
+			if not is_valid_computrabajo_job(
+				title=job.get("title"),
+				url=job.get("url"),
+				description=job.get("description"),
+			):
 				continue
 			records.append(
 				self._record_for_job(
