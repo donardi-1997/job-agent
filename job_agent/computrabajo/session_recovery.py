@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from browser_use import Browser
 
@@ -39,8 +38,8 @@ async def reset_computrabajo_site_data(profile_dir: Path | str = DEFAULT_PROFILE
         await cdp.cdp_client.send.Network.enable(session_id=cdp.session_id)
         await cdp.cdp_client.send.Storage.enable(session_id=cdp.session_id)
 
-        # Browser cache is shared by the profile, but contains no authentication
-        # credentials. Authentication/storage is cleared only for Computrabajo origins.
+        # Browser cache itself contains no authentication credentials. Site data
+        # (cookies/local storage/etc.) is cleared only for Computrabajo origins.
         await cdp.cdp_client.send.Network.clearBrowserCache(session_id=cdp.session_id)
         for origin in COMPUTRABAJO_SITE_ORIGINS:
             await cdp.cdp_client.send.Storage.clearDataForOrigin(
@@ -60,3 +59,15 @@ async def reset_computrabajo_site_data(profile_dir: Path | str = DEFAULT_PROFILE
         }
     finally:
         await browser.stop()
+
+
+def main() -> None:
+    """One-command local recovery for redirect loops in the persistent profile."""
+    from job_agent.async_runtime import run_async
+
+    result = run_async(reset_computrabajo_site_data(), timeout=60)
+    print(result["message"])
+
+
+if __name__ == "__main__":
+    main()
