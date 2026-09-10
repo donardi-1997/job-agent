@@ -100,6 +100,7 @@ class UserProfile(BaseModel):
 			years_experience=self.years_experience,
 			preferred_locations=tuple(self.preferred_locations),
 			remote_ok=self.remote_ok,
+			professional_summary=self.professional_summary,
 		)
 
 	def to_search_preferences(self) -> SearchPreferences:
