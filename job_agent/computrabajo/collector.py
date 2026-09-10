@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from browser_use import Agent, Browser, ChatBrowserUse
-from job_agent.config import CandidateProfile, SearchPreferences
+from job_agent.profile import ProfileStore
 from job_agent.scoring import JobPosting, score_job
 from job_agent.storage import JobRecord, JobStore
 
@@ -44,14 +44,10 @@ class ExtractedJob(BaseModel):
 
 
 class SearchOutput(BaseModel):
-	"""Structured Browser Use output for a Computrabajo search."""
-
 	jobs: list[ExtractedJob] = Field(default_factory=list)
 
 
 class SearchRunStatus(BaseModel):
-	"""Observable state for the dashboard while a search runs."""
-
 	state: Literal["idle", "running", "completed", "error"] = "idle"
 	keyword: str = ""
 	location: str = ""
@@ -65,6 +61,7 @@ class ComputrabajoCollector:
 
 	def __init__(self, store: JobStore | None = None, profile_dir: Path | str = DEFAULT_PROFILE_DIR) -> None:
 		self.store = store or JobStore()
+		self.profile_store = ProfileStore(self.store.path)
 		self.profile_dir = Path(profile_dir)
 		self.profile_dir.mkdir(parents=True, exist_ok=True)
 		self._lock = threading.Lock()
@@ -75,8 +72,6 @@ class ComputrabajoCollector:
 			return self._status.model_dump()
 
 	def start(self, request: SearchRequest) -> bool:
-		"""Start one background search. Returns False if another search is already running."""
-
 		with self._lock:
 			if self._status.state == "running":
 				return False
@@ -86,15 +81,13 @@ class ComputrabajoCollector:
 				location=request.location,
 				message="Abriendo Computrabajo en el navegador local…",
 			)
-
-		thread = threading.Thread(target=self._worker, args=(request,), daemon=True, name="computrabajo-search")
-		thread.start()
+		threading.Thread(target=self._worker, args=(request,), daemon=True, name="computrabajo-search").start()
 		return True
 
 	def _worker(self, request: SearchRequest) -> None:
 		try:
 			result = asyncio.run(self._collect(request))
-			persisted = self._persist(result.jobs, request)
+			persisted = self._persist(result.jobs)
 			with self._lock:
 				self._status = SearchRunStatus(
 					state="completed",
@@ -106,47 +99,34 @@ class ComputrabajoCollector:
 				)
 		except Exception as exc:
 			with self._lock:
-				self._status = SearchRunStatus(
-					state="error",
-					keyword=request.keyword,
-					location=request.location,
-					message=str(exc),
-				)
+				self._status = SearchRunStatus(state="error", keyword=request.keyword, location=request.location, message=str(exc))
 
 	async def _collect(self, request: SearchRequest) -> SearchOutput:
 		load_dotenv()
 		if not os.getenv("BROWSER_USE_API_KEY"):
-			raise RuntimeError(
-				"Falta BROWSER_USE_API_KEY. Agrégala al archivo .env para usar el agente de Browser Use."
-			)
-
+			raise RuntimeError("Falta BROWSER_USE_API_KEY. Agrégala al archivo .env para usar Browser Use.")
 		browser = Browser(
 			user_data_dir=str(self.profile_dir.resolve()),
 			headless=False,
 			allowed_domains=["co.computrabajo.com"],
 		)
 		try:
-			task = self._build_task(request)
 			agent = Agent(
-				task=task,
+				task=self._build_task(request),
 				llm=ChatBrowserUse(),
 				browser=browser,
 				output_model_schema=SearchOutput,
 				use_vision="auto",
 				extend_system_message=(
-					"This is a read-only job discovery task. Never apply to a job, never submit a form, "
-					"never change account data, and never attempt to bypass CAPTCHA, 2FA, bot detection, "
-					"or any access control. If a challenge blocks discovery, stop and report it."
+					"This is read-only job discovery. Never apply, submit a form, change account data, send messages, "
+					"or bypass CAPTCHA, 2FA, bot detection, or access controls. Stop if such a challenge blocks discovery."
 				),
 			)
 			history = await agent.run(max_steps=60)
 			output = history.structured_output
 			if output is None:
-				final_result = history.final_result() or ""
-				raise RuntimeError(f"Browser Use no devolvió vacantes estructuradas. Resultado: {final_result[:300]}")
-			if isinstance(output, SearchOutput):
-				return output
-			return SearchOutput.model_validate(output)
+				raise RuntimeError(f"Browser Use no devolvió vacantes estructuradas. Resultado: {(history.final_result() or '')[:300]}")
+			return output if isinstance(output, SearchOutput) else SearchOutput.model_validate(output)
 		finally:
 			await browser.stop()
 
@@ -156,36 +136,31 @@ class ComputrabajoCollector:
 Open {COMPUTRABAJO_URL} and search for jobs in Colombia.
 Search term: {request.keyword!r}
 Location: {request.location!r}
-
-Collect up to {request.max_results} distinct jobs from the search results, prioritizing recent and relevant results.
-For every result return: exact job title, company, displayed location, a useful job-description/re requirements summary, and the canonical Computrabajo vacancy URL.
-Open individual vacancy pages when needed to capture enough description for later matching.
-Do not apply, do not click any final application/submission button, do not modify the user's account, and do not send messages.
-If login is requested but browsing public results is still possible, continue without logging in.
-If CAPTCHA, 2FA, or an anti-bot challenge blocks the task, stop instead of trying to bypass it.
-Return only data that belongs to actual job vacancies on co.computrabajo.com.
+Collect up to {request.max_results} distinct, recent and relevant jobs.
+Return exact title, company, displayed location, useful description/requirements summary, and canonical Computrabajo vacancy URL.
+Open vacancy pages when needed for enough description to score the job later.
+Do not apply, do not click any final application/submission button, do not modify the account, and do not send messages.
+If CAPTCHA, 2FA, or anti-bot protection blocks the task, stop instead of bypassing it.
+Return only actual vacancies on co.computrabajo.com.
 """.strip()
 
-	def _persist(self, jobs: list[ExtractedJob], request: SearchRequest) -> int:
-		profile = self._profile_from_env(request)
-		preferences = SearchPreferences()
+	def _persist(self, jobs: list[ExtractedJob]) -> int:
+		settings = self.profile_store.get()
+		profile = settings.to_candidate_profile()
+		preferences = settings.to_search_preferences()
 		records: list[JobRecord] = []
 		for item in jobs:
 			url = str(item.url)
-			posting = JobPosting(
-				title=item.title,
-				company=item.company,
-				location=item.location,
-				description=item.description,
-				url=url,
+			match = score_job(
+				JobPosting(title=item.title, company=item.company, location=item.location, description=item.description, url=url),
+				profile,
+				preferences,
 			)
-			match = score_job(posting, profile, preferences)
-			external_id = hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
 			records.append(
 				JobRecord(
 					id=None,
 					source="computrabajo",
-					external_id=external_id,
+					external_id=hashlib.sha256(url.encode("utf-8")).hexdigest()[:24],
 					title=item.title,
 					company=item.company,
 					location=item.location,
@@ -196,19 +171,3 @@ Return only data that belongs to actual job vacancies on co.computrabajo.com.
 				)
 			)
 		return self.store.upsert_jobs(records)
-
-	@staticmethod
-	def _profile_from_env(request: SearchRequest) -> CandidateProfile:
-		roles = tuple(
-			part.strip() for part in os.getenv("JOB_AGENT_TARGET_ROLES", request.keyword).split(",") if part.strip()
-		)
-		skills = tuple(part.strip() for part in os.getenv("JOB_AGENT_SKILLS", "").split(",") if part.strip())
-		locations = tuple(
-			part.strip() for part in os.getenv("JOB_AGENT_LOCATIONS", request.location).split(",") if part.strip()
-		)
-		return CandidateProfile(
-			target_roles=roles,
-			skills=skills,
-			preferred_locations=locations,
-			remote_ok=True,
-		)
