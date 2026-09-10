@@ -184,7 +184,6 @@ class AssistedApplicationPreparer:
                 fallback_reason=fallback_reason,
             )
         except Exception:
-            # Efficiency telemetry must never break an application.
             pass
 
     @staticmethod
@@ -301,12 +300,10 @@ class AssistedApplicationPreparer:
             fallback_reason=fallback_reason,
         )
 
-        if local_result is not None and local_result.observed_fields:
-            # The AI-assisted success teaches the deterministic engine which field
-            # patterns were actually usable, while answers are stored separately.
+        if result.submitted and result.questions and local_result is not None and local_result.observed_fields:
             self.pattern_store.confirm_success(
                 local_result.observed_fields,
-                [item.question for item in result.questions] if result.submitted else [],
+                [item.question for item in result.questions],
             )
         return result
 
