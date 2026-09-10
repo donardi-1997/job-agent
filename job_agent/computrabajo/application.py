@@ -58,6 +58,18 @@ class ApplicationDraftOutput(BaseModel):
     ready_to_submit: bool = False
 
 
+class RealApplicationDraftOutput(ApplicationDraftOutput):
+    """AI fallback result schema for REAL runs.
+
+    TEST mode never reaches Browser Use. Giving REAL runs a schema whose defaults
+    are themselves REAL avoids Browser Use silently filling omitted fields with
+    mode='test'/test_mode=True in its raw final result.
+    """
+
+    mode: Literal["real"] = "real"
+    test_mode: bool = False
+
+
 class PreparationStatus(BaseModel):
     state: Literal["idle", "running", "completed", "error"] = "idle"
     job_id: int | None = None
@@ -424,6 +436,7 @@ class AssistedApplicationPreparer:
 
         llm = MeteredChatBrowserUse(model=requested_model, on_usage=persist_live_usage)
         try:
+            result_schema = RealApplicationDraftOutput if application_mode == "real" else ApplicationDraftOutput
             agent = Agent(
                 task=self._build_task(
                     job,
@@ -436,7 +449,7 @@ class AssistedApplicationPreparer:
                 llm=llm,
                 browser=browser,
                 sensitive_data=sensitive_credentials,
-                output_model_schema=ApplicationDraftOutput,
+                output_model_schema=result_schema,
                 use_vision="auto",
                 extend_system_message=(
                     "Complete the user's job application on Computrabajo and submit it when the required fields can be answered "
@@ -447,7 +460,9 @@ class AssistedApplicationPreparer:
                     "qualifications, employment history, salary facts, legal declarations, or answers that are not supported by supplied "
                     "data. Never bypass CAPTCHA, 2FA, bot detection, or access controls. If such a challenge blocks the application, stop "
                     "and report it accurately. Google OAuth navigation is allowed only for the user's Computrabajo sign-in. Never change "
-                    "Google account settings, security settings, recovery information, or credentials."
+                    "Google account settings, security settings, recovery information, or credentials. When you finish, call the Browser "
+                    "Use done action with exactly one data object containing the structured result. Never place fields such as submitted, "
+                    "submission_status, summary, questions, or confirmation_text directly under done; they belong inside done.data."
                 ),
             )
             history = await agent.run(max_steps=self._application_ai_max_steps())
@@ -507,6 +522,10 @@ For every application question or field encountered, record in the final structu
 Never include passwords, authentication tokens, secret placeholders, or login credentials in the application-question output.
 
 After the final action, verify whether Computrabajo shows a success/confirmation state. Set submitted=true only when there is positive evidence that the application was submitted. Capture confirmation_text and confirmation_url when available.
+
+When finishing the task, use the Browser Use done action in this shape:
+{{"done": {{"data": {{...the complete structured application result...}}}}}}
+Do not put result fields directly under "done". In particular, submitted, submission_status, summary, questions, confirmation_text, mode, test_mode, and ready_to_submit must be inside done.data.
 
 Deterministic known-answer memory (reuse only for equivalent questions):
 {known_answers or []}
