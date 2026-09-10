@@ -78,6 +78,18 @@ class AnswerMemory:
                 (normalized, question.strip(), clean_answer, source, max(0, min(100, confidence))),
             )
 
+    def forget(self, question: str) -> bool:
+        """Remove one exact learned/manual answer from local memory."""
+        normalized = normalize_question(question)
+        if not normalized:
+            return False
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM answer_memory WHERE question_normalized = ?",
+                (normalized,),
+            )
+            return cursor.rowcount > 0
+
     def remember_questions(self, questions: list[dict[str, object]], *, submitted: bool) -> int:
         if not submitted:
             return 0
@@ -92,35 +104,23 @@ class AnswerMemory:
                 count += 1
         return count
 
-    def _rows(self, limit: int = 200) -> list[dict[str, object]]:
+    def _rows(self, limit: int = 200, *, source: str | None = None) -> list[dict[str, object]]:
+        query = """
+            SELECT question_normalized, question, answer, source, confidence, use_count, last_used_at
+            FROM answer_memory
+        """
+        params: list[object] = []
+        if source is not None:
+            query += " WHERE source = ?"
+            params.append(source)
+        query += " ORDER BY use_count DESC, last_used_at DESC LIMIT ?"
+        params.append(limit)
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT question_normalized, question, answer, source, confidence, use_count, last_used_at
-                FROM answer_memory
-                ORDER BY use_count DESC, last_used_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            rows = connection.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
-    def resolve(self, question: str, profile: UserProfile) -> str | None:
-        """Resolve a known answer without an LLM. Conservative matching avoids fabricated facts."""
-        normalized = normalize_question(question)
-        if not normalized:
-            return None
-
-        direct_profile = self._profile_answer(normalized, profile)
-        if direct_profile:
-            return direct_profile
-
-        candidates: list[tuple[str, str]] = []
-        for item in profile.frequent_answers:
-            candidates.append((normalize_question(item.question), item.answer))
-        for row in self._rows():
-            candidates.append((str(row["question_normalized"]), str(row["answer"])))
-
+    @staticmethod
+    def _match_candidates(normalized: str, candidates: list[tuple[str, str]]) -> str | None:
         for candidate, answer in candidates:
             if candidate == normalized:
                 return answer
@@ -128,6 +128,39 @@ class AnswerMemory:
             if candidate and SequenceMatcher(None, candidate, normalized).ratio() >= 0.90:
                 return answer
         return None
+
+    def resolve(self, question: str, profile: UserProfile) -> str | None:
+        """Resolve a known answer without an LLM. Explicit manual overrides have highest priority."""
+        normalized = normalize_question(question)
+        if not normalized:
+            return None
+
+        manual_candidates = [
+            (str(row["question_normalized"]), str(row["answer"]))
+            for row in self._rows(source="manual")
+        ]
+        manual = self._match_candidates(normalized, manual_candidates)
+        if manual:
+            return manual
+
+        direct_profile = self._profile_answer(normalized, profile)
+        if direct_profile:
+            return direct_profile
+
+        profile_candidates = [
+            (normalize_question(item.question), item.answer)
+            for item in profile.frequent_answers
+        ]
+        profile_answer = self._match_candidates(normalized, profile_candidates)
+        if profile_answer:
+            return profile_answer
+
+        learned_candidates = [
+            (str(row["question_normalized"]), str(row["answer"]))
+            for row in self._rows()
+            if str(row.get("source") or "") != "manual"
+        ]
+        return self._match_candidates(normalized, learned_candidates)
 
     @staticmethod
     def _profile_answer(normalized: str, profile: UserProfile) -> str | None:
@@ -143,14 +176,28 @@ class AnswerMemory:
         return None
 
     def context_for_agent(self, profile: UserProfile, limit: int = 80) -> list[dict[str, str]]:
-        """Return compact, deterministic answers the browser agent should reuse verbatim."""
+        """Return compact deterministic answers; explicit manual adjustments win over all other sources."""
         context: list[dict[str, str]] = []
         seen: set[str] = set()
+
+        for row in self._rows(limit=limit, source="manual"):
+            normalized = str(row["question_normalized"])
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                context.append(
+                    {
+                        "question": str(row["question"]),
+                        "answer": str(row["answer"]),
+                        "source": "manual",
+                    }
+                )
+
         for item in profile.frequent_answers:
             normalized = normalize_question(item.question)
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 context.append({"question": item.question, "answer": item.answer, "source": "profile"})
+
         for row in self._rows(limit=limit):
             normalized = str(row["question_normalized"])
             if normalized not in seen:
@@ -159,7 +206,7 @@ class AnswerMemory:
                     {
                         "question": str(row["question"]),
                         "answer": str(row["answer"]),
-                        "source": "learned",
+                        "source": str(row.get("source") or "learned"),
                     }
                 )
         return context[:limit]
