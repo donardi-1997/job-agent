@@ -3,6 +3,7 @@
   const formatCop = (value) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(value || 0) * usdCopRate);
   const formatUsd = (value) => `US$${Number(value || 0).toFixed(4)}`;
   const formatTokens = (value) => new Intl.NumberFormat('es-CO').format(Number(value || 0));
+  const operationLabel = (operation) => operation === 'application' ? 'Postulación' : operation === 'question_resolution' ? 'Pregunta compacta' : 'Búsqueda';
 
   function ensureStyles() {
     if (document.querySelector('#aiUsageStyles')) return;
@@ -27,7 +28,7 @@
     panel.id = 'aiUsagePanel';
     panel.className = 'ai-usage-panel';
     panel.innerHTML = `
-      <div class="ai-usage-heading"><div><p class="eyebrow">COSTO DE IA · APRENDIZAJE LOCAL</p><h2>Consumo del agente en pesos colombianos</h2><p>El consumo de Browser Use se registra después de cada respuesta del modelo, incluso mientras una postulación sigue en curso. La meta es aumentar cobertura determinística y reducir progresivamente las llamadas de IA.</p><div class="ai-rate" id="aiRate">Tasa USD/COP: cargando…</div></div><span class="safe-pill">COP</span></div>
+      <div class="ai-usage-heading"><div><p class="eyebrow">COSTO DE IA · APRENDIZAJE LOCAL</p><h2>Consumo del agente en pesos colombianos</h2><p>El consumo se registra por respuesta del modelo. Las preguntas nuevas se resuelven con una llamada compacta antes de considerar un agente de navegador completo; la meta es aumentar cobertura determinística y reducir progresivamente el gasto.</p><div class="ai-rate" id="aiRate">Tasa USD/COP: cargando…</div></div><span class="safe-pill">COP</span></div>
       <div class="ai-usage-grid">
         <article><span>Hoy</span><strong id="aiTodayCost">$0</strong><small id="aiTodayTokens">0 tokens · 0 llamadas IA</small><small id="aiTodayUsd">US$0.0000</small></article>
         <article><span>Este mes</span><strong id="aiMonthCost">$0</strong><small id="aiMonthTokens">0 tokens · 0 llamadas IA</small><small id="aiMonthUsd">US$0.0000</small></article>
@@ -53,7 +54,7 @@
     document.querySelector('#answerMemoryUses').textContent = `${memory.learned_questions || 0}/${memory.encountered_questions || 0} preguntas aprendidas · ${memory.submitted_applications || 0} postulaciones exitosas`;
     document.querySelector('#answerMemoryCoverage').textContent = `${Number(memory.answer_coverage_pct || 0).toFixed(1)}% cobertura determinística`;
     const recent = data.recent || [];
-    document.querySelector('#aiRecent').innerHTML = recent.length ? recent.slice(0, 6).map((item) => `<span class="ai-recent-item"><b>${item.operation === 'application' ? 'Postulación' : 'Búsqueda'}</b>${formatTokens(item.total_tokens)} tokens · ${formatCop(item.estimated_cost_usd)} · ${item.model}</span>`).join('') : '<span class="empty-chip">Aún no hay consumo de IA registrado.</span>';
+    document.querySelector('#aiRecent').innerHTML = recent.length ? recent.slice(0, 6).map((item) => `<span class="ai-recent-item"><b>${operationLabel(item.operation)}</b>${formatTokens(item.total_tokens)} tokens · ${formatCop(item.estimated_cost_usd)} · ${item.model}</span>`).join('') : '<span class="empty-chip">Aún no hay consumo de IA registrado.</span>';
   }
 
   async function refresh() {
