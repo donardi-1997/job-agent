@@ -10,7 +10,7 @@ from job_agent.computrabajo.deterministic_application import (
     DeterministicApplicationRunner,
     ObservedField,
 )
-from job_agent.computrabajo.semantic_answers import (
+from job_agent.semantic_answers import (
     LocalSemanticAnswer,
     classify_question,
     semantic_similarity,
