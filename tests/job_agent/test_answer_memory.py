@@ -43,7 +43,7 @@ def test_manual_adjustment_has_priority_for_future_equivalent_questions(tmp_path
         confidence=100,
     )
 
-    assert memory.resolve("Indica tu aspiración salarial", profile) == "5.000.000 COP"
+    assert memory.resolve("Cual es tu aspiracion salarial", profile) == "5.000.000 COP"
     context = memory.context_for_agent(profile)
     assert context[0]["answer"] == "5.000.000 COP"
     assert context[0]["source"] == "manual"
