@@ -88,6 +88,12 @@ class EnhancedDashboardHandler(DashboardHandler):
 				"uses_ai": False,
 			})
 			return
+		if parsed.path == "/api/search/efficiency":
+			payload = self.collector.search_efficiency()
+			payload["strategy"] = "deterministic_first"
+			payload["ai_is_fallback"] = True
+			self._send_json(payload)
+			return
 		if parsed.path == "/api/currency":
 			rate = _usd_cop_rate()
 			self._send_json({
@@ -135,8 +141,6 @@ class EnhancedDashboardHandler(DashboardHandler):
 				self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 			return
 		if parsed.path == "/api/profile":
-			# The legacy profile form does not know about fields provided by enhanced
-			# controls. Preserve them when they are omitted from the form payload.
 			try:
 				body = self._read_json()
 				current = self.profile_store.get()
