@@ -68,7 +68,7 @@ class PreparationStatus(BaseModel):
 
 
 class AssistedApplicationPreparer:
-    """Complete Computrabajo applications locally first, using AI only as fallback."""
+    """Complete Computrabajo applications locally first, using AI only as fallback in REAL mode."""
 
     def __init__(self, store: JobStore | None = None, profile_dir: Path | str = DEFAULT_PROFILE_DIR) -> None:
         self.store = store or JobStore()
@@ -143,7 +143,7 @@ class AssistedApplicationPreparer:
                 if result.submitted and result.confirmation_text
                 else "Postulación enviada correctamente."
                 if result.submitted
-                else result.blocked_reason or "La postulación no pudo completarse."
+                else result.summary or result.blocked_reason or "La postulación no pudo completarse."
             )
             with self._lock:
                 self._status = PreparationStatus(
@@ -210,16 +210,20 @@ class AssistedApplicationPreparer:
             )
             for item in result.questions
         ]
+        if result.test_mode and result.ready_to_submit:
+            summary = "Formulario completado en modo prueba. Listo para enviar."
+        elif result.test_mode:
+            summary = result.blocked_reason or result.fallback_reason or "Formulario inspeccionado en modo prueba."
+        elif result.submitted:
+            summary = "Postulación completada localmente sin IA."
+        else:
+            summary = result.blocked_reason or result.fallback_reason or "Intento determinístico finalizado."
         return ApplicationDraftOutput(
             questions=questions,
             application_url=result.application_url,
             login_required=result.login_required,
             blocked_reason=result.blocked_reason,
-            summary=(
-                "Postulación completada localmente sin IA."
-                if result.submitted
-                else result.blocked_reason or "Intento determinístico finalizado."
-            ),
+            summary=summary,
             submitted=result.submitted,
             submission_status=result.submission_status,
             confirmation_text=result.confirmation_text,
@@ -227,6 +231,28 @@ class AssistedApplicationPreparer:
             mode=result.mode if result.mode in {"test", "real"} else "test",
             test_mode=result.test_mode,
             ready_to_submit=result.ready_to_submit,
+        )
+
+    @staticmethod
+    def _enforce_test_invariant(output: ApplicationDraftOutput) -> ApplicationDraftOutput:
+        """Defense in depth: TEST results can never be represented as submitted."""
+        unresolved = any(item.requires_user_input for item in output.questions)
+        ready = bool(output.ready_to_submit) and not output.blocked_reason and not unresolved
+        return output.model_copy(
+            update={
+                "mode": "test",
+                "test_mode": True,
+                "submitted": False,
+                "submission_status": "test_ready" if ready else "test_incomplete",
+                "ready_to_submit": ready,
+                "confirmation_text": "",
+                "confirmation_url": "",
+                "summary": (
+                    "Formulario completado en modo prueba. Listo para enviar."
+                    if ready
+                    else output.summary or output.blocked_reason or "Formulario incompleto en modo prueba."
+                ),
+            }
         )
 
     async def _apply(self, job: dict[str, object]) -> ApplicationDraftOutput:
@@ -249,6 +275,24 @@ class AssistedApplicationPreparer:
                 saved_draft=saved_draft,
                 mode=application_mode,
             )
+
+            # TEST mode is deliberately deterministic-only. This is the backend safety
+            # boundary: Browser Use never receives control in TEST mode, so a prompt or
+            # model mistake cannot click a final submission action.
+            if application_mode == "test":
+                self._last_mode = "deterministic"
+                self._last_fallback_reason = local_result.fallback_reason
+                output = self._enforce_test_invariant(self._from_deterministic(local_result))
+                unresolved = sum(1 for item in output.questions if item.requires_user_input)
+                self._record_execution(
+                    job_id=job_id,
+                    mode="deterministic",
+                    submitted=False,
+                    unresolved_fields=unresolved,
+                    fallback_reason=local_result.fallback_reason,
+                )
+                return output
+
             if local_result.terminal_without_ai:
                 self._last_mode = "deterministic"
                 unresolved = sum(1 for item in local_result.questions if item.requires_user_input)
@@ -268,6 +312,23 @@ class AssistedApplicationPreparer:
             fallback_reason = local_result.fallback_reason or "El flujo local no pudo completar la postulación."
         except Exception as exc:
             fallback_reason = f"{type(exc).__name__}: {exc}"
+            if application_mode == "test":
+                self._last_mode = "deterministic"
+                self._last_fallback_reason = fallback_reason
+                self._record_execution(
+                    job_id=job_id,
+                    mode="deterministic",
+                    submitted=False,
+                    fallback_reason=fallback_reason,
+                )
+                return ApplicationDraftOutput(
+                    mode="test",
+                    test_mode=True,
+                    submitted=False,
+                    submission_status="test_incomplete",
+                    ready_to_submit=False,
+                    summary=f"Modo prueba detenido de forma segura: {fallback_reason}",
+                )
 
         self._last_fallback_reason = fallback_reason
         fallback_enabled = os.getenv("JOB_AGENT_APPLICATION_AI_FALLBACK", "1").strip().casefold() not in {
@@ -378,10 +439,7 @@ class AssistedApplicationPreparer:
                 raise RuntimeError(f"No se pudo obtener un resultado estructurado. Resultado: {(history.final_result() or '')[:300]}")
             result = output if isinstance(output, ApplicationDraftOutput) else ApplicationDraftOutput.model_validate(output)
             if application_mode == "test":
-                result = result.model_copy(update={"mode": "test", "test_mode": True, "submitted": False,
-                    "submission_status": "test_ready" if not result.blocked_reason else "test_incomplete",
-                    "ready_to_submit": not bool(result.blocked_reason) and not any(item.requires_user_input for item in result.questions),
-                    "summary": result.summary or "Formulario completado en modo prueba. Listo para enviar."})
+                result = self._enforce_test_invariant(result)
             self.answer_memory.remember_questions(
                 [item.model_dump() for item in result.questions],
                 submitted=result.submitted,
