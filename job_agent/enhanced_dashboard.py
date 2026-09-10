@@ -59,6 +59,7 @@ class EnhancedDashboardHandler(DashboardHandler):
 				"pagination_control.js",
 				"contact_tracking.js",
 				"credentials_control.js",
+				"score_refresh.js",
 			):
 				extra = STATIC_DIR / extra_name
 				if extra.exists():
