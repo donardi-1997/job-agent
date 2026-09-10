@@ -1,8 +1,9 @@
 from job_agent.computrabajo.application import AssistedApplicationPreparer
 
 
-def test_application_task_is_draft_only_and_does_not_invent_personal_data() -> None:
+def test_application_task_submits_without_inventing_personal_data() -> None:
 	job = {
+		"id": 1,
 		"url": "https://co.computrabajo.com/job-1",
 		"title": "Python Developer",
 		"company": "Example SAS",
@@ -15,23 +16,24 @@ def test_application_task_is_draft_only_and_does_not_invent_personal_data() -> N
 		"years_experience": 2,
 		"preferred_locations": ["Colombia"],
 	}
+	saved_draft = {"questions": [{"question": "Disponibilidad", "suggested_answer": "Inmediata"}]}
 
-	task = AssistedApplicationPreparer._build_task(job, profile)
+	task = AssistedApplicationPreparer._build_task(job, profile, saved_draft)
 
-	assert "PREPARE a draft" in task
-	assert "Do not submit anything" in task
-	assert "Do not invent missing facts" in task or "do not invent" in task.casefold()
-	assert "Never submit" in task
-	assert "CAPTCHA/2FA" in task
+	assert "COMPLETE AND SUBMIT" in task
+	assert "click the final application/submit/confirm action" in task
+	assert "Never invent facts" in task
+	assert "Never bypass CAPTCHA" in task
+	assert "Inmediata" in task
 
 
-def test_application_task_contains_only_supplied_profile_facts() -> None:
-	job = {"url": "https://co.computrabajo.com/job-2", "title": "Backend Developer"}
+def test_application_task_contains_only_supplied_profile_facts_and_saved_answers() -> None:
+	job = {"id": 2, "url": "https://co.computrabajo.com/job-2", "title": "Backend Developer"}
 	profile = {"skills": ["Python", "AWS"], "years_experience": 3}
 
-	task = AssistedApplicationPreparer._build_task(job, profile)
+	task = AssistedApplicationPreparer._build_task(job, profile, {})
 
 	assert "Python" in task
 	assert "AWS" in task
 	assert "3" in task
-	assert "salary" not in task.casefold()
+	assert "Avoid duplicate submission" in task
