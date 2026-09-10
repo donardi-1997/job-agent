@@ -9,96 +9,58 @@
 <body>
 	<div class="app-shell">
 		<aside class="sidebar">
-			<div class="brand">
-				<div class="brand-mark">JA</div>
-				<div><strong>Job Agent</strong><span>Local workspace</span></div>
-			</div>
+			<div class="brand"><div class="brand-mark">JA</div><div><strong>Job Agent</strong><span>Local workspace</span></div></div>
 			<nav>
 				<a class="nav-item active" href="#dashboard">Dashboard</a>
 				<a class="nav-item" href="#search">Buscar</a>
 				<a class="nav-item" href="#jobs">Vacantes</a>
-				<a class="nav-item" href="#applications">Postulaciones</a>
-				<a class="nav-item" href="#profile">Perfil</a>
+				<a class="nav-item" href="#profile">Mi perfil</a>
 			</nav>
-			<div class="local-badge"><span class="dot"></span> Ejecutando localmente</div>
+			<div class="local-badge"><span class="dot"></span> Privado · Solo este PC</div>
 		</aside>
 
 		<main class="content" id="dashboard">
 			<header class="topbar">
-				<div>
-					<p class="eyebrow">COMPUTRABAJO AGENT</p>
-					<h1>Centro de búsqueda laboral</h1>
-					<p class="subtitle">Busca vacantes reales, priorízalas por compatibilidad y conserva todo el historial en tu computador.</p>
-				</div>
-				<div class="actions">
-					<button class="button secondary" id="refreshButton">Actualizar</button>
-					<button class="button primary" id="focusSearchButton">Buscar vacantes</button>
-				</div>
+				<div><p class="eyebrow">COMPUTRABAJO AGENT</p><h1>Centro de búsqueda laboral</h1><p class="subtitle">Busca vacantes reales, priorízalas según tu perfil y conserva tu historial de forma local.</p></div>
+				<div class="actions"><button class="button secondary" id="refreshButton">Actualizar</button><button class="button primary" id="focusSearchButton">Nueva búsqueda</button></div>
 			</header>
 
 			<section class="metrics" aria-label="Resumen">
-				<article class="metric-card"><span>Vacantes encontradas</span><strong id="totalMetric">0</strong><small>Base local</small></article>
+				<article class="metric-card"><span>Vacantes</span><strong id="totalMetric">0</strong><small>Guardadas localmente</small></article>
 				<article class="metric-card"><span>Match alto</span><strong id="highMatchMetric">0</strong><small>Score ≥ 85</small></article>
-				<article class="metric-card"><span>Postuladas</span><strong id="appliedMetric">0</strong><small>Historial</small></article>
+				<article class="metric-card"><span>Postuladas</span><strong id="appliedMetric">0</strong><small>Pipeline</small></article>
 				<article class="metric-card"><span>Score promedio</span><strong id="avgScoreMetric">0</strong><small>Compatibilidad</small></article>
 			</section>
 
 			<section class="search-panel" id="search">
-				<div>
-					<p class="eyebrow">NUEVA BÚSQUEDA</p>
-					<h2>Buscar en Computrabajo</h2>
-					<p>Browser Use abrirá un navegador local visible, recorrerá Computrabajo y guardará los resultados automáticamente.</p>
-				</div>
+				<div class="section-heading"><div><p class="eyebrow">NUEVA BÚSQUEDA</p><h2>Buscar en Computrabajo</h2><p>El agente abrirá el navegador local, inspeccionará las ofertas y las guardará sin postular automáticamente.</p></div><span class="safe-pill">AUTO SUBMIT OFF</span></div>
 				<form id="searchForm" class="search-form">
-					<label>Cargo o palabra clave
-						<input id="keywordInput" name="keyword" value="Python Developer" minlength="2" maxlength="120" required>
-					</label>
-					<label>Ubicación
-						<input id="locationInput" name="location" value="Colombia" minlength="2" maxlength="120" required>
-					</label>
-					<label>Máximo de resultados
-						<select id="maxResultsInput" name="max_results">
-							<option value="10">10</option>
-							<option value="20" selected>20</option>
-							<option value="30">30</option>
-							<option value="50">50</option>
-						</select>
-					</label>
+					<label>Cargo o palabra clave<input id="keywordInput" name="keyword" value="Python Developer" minlength="2" maxlength="120" required></label>
+					<label>Ubicación<input id="locationInput" name="location" value="Colombia" minlength="2" maxlength="120" required></label>
+					<label>Resultados<select id="maxResultsInput" name="max_results"><option value="10">10</option><option value="20" selected>20</option><option value="30">30</option><option value="50">50</option></select></label>
 					<button class="button primary search-submit" id="searchButton" type="submit">Iniciar búsqueda</button>
 				</form>
-				<div class="search-status" id="searchStatus" data-state="idle">
-					<span class="status-indicator"></span>
-					<div><strong id="searchStatusTitle">Agente listo</strong><span id="searchStatusMessage">Configura tu búsqueda y ejecútala cuando quieras.</span></div>
-				</div>
+				<div class="search-status" id="searchStatus" data-state="idle"><span class="status-indicator"></span><div><strong id="searchStatusTitle">Agente listo</strong><span id="searchStatusMessage">Configura tu búsqueda y ejecútala cuando quieras.</span></div></div>
 			</section>
 
 			<section class="panel" id="jobs">
-				<div class="panel-header">
-					<div><h2>Vacantes priorizadas</h2><p>Ordenadas automáticamente por compatibilidad con tu perfil.</p></div>
-					<div class="filters">
-						<label>Score mínimo <input id="scoreFilter" type="number" min="0" max="100" value="0"></label>
-						<label>Estado
-							<select id="statusFilter">
-								<option value="">Todos</option>
-								<option value="discovered">Descubierta</option>
-								<option value="saved">Guardada</option>
-								<option value="applied">Postulada</option>
-							</select>
-						</label>
-					</div>
-				</div>
+				<div class="panel-header"><div><h2>Vacantes priorizadas</h2><p>El score se calcula con el perfil que configures abajo.</p></div><div class="filters"><label>Score mínimo<input id="scoreFilter" type="number" min="0" max="100" value="0"></label><label>Estado<select id="statusFilter"><option value="">Todos</option><option value="discovered">Descubierta</option><option value="saved">Guardada</option><option value="applied">Postulada</option></select></label></div></div>
+				<div class="table-wrap"><table><thead><tr><th>Vacante</th><th>Ubicación</th><th>Score</th><th>Decisión</th><th></th></tr></thead><tbody id="jobsBody"></tbody></table><div class="empty" id="emptyState"><div class="empty-icon">◎</div><h3>Aún no hay vacantes</h3><p>Ejecuta tu primera búsqueda y los resultados aparecerán aquí automáticamente.</p></div></div>
+			</section>
 
-				<div class="table-wrap">
-					<table>
-						<thead><tr><th>Vacante</th><th>Ubicación</th><th>Score</th><th>Estado</th><th></th></tr></thead>
-						<tbody id="jobsBody"></tbody>
-					</table>
-					<div class="empty" id="emptyState">
-						<div class="empty-icon">◎</div>
-						<h3>Aún no hay vacantes</h3>
-						<p>Ejecuta tu primera búsqueda. Los resultados encontrados por Browser Use aparecerán aquí automáticamente.</p>
-					</div>
-				</div>
+			<section class="profile-panel" id="profile">
+				<div class="section-heading"><div><p class="eyebrow">MATCHING</p><h2>Mi perfil profesional</h2><p>Estos datos permanecen en tu computador y determinan cómo se puntúan las vacantes.</p></div><span class="profile-state" id="profileState">Perfil local</span></div>
+				<form id="profileForm" class="profile-form">
+					<label class="wide">Cargos objetivo <span>Separados por coma</span><input id="rolesInput" placeholder="Python Developer, Backend Developer"></label>
+					<label class="wide">Skills <span>Separadas por coma</span><input id="skillsInput" placeholder="Python, FastAPI, AWS, SQL, Docker"></label>
+					<label>Ubicaciones preferidas<input id="locationsInput" placeholder="Colombia, Bogotá"></label>
+					<label>Años de experiencia<input id="experienceInput" type="number" min="0" max="50" step="0.5"></label>
+					<label>Score mínimo<input id="minScoreInput" type="number" min="0" max="100"></label>
+					<label>Preparar desde<input id="prepareScoreInput" type="number" min="0" max="100"></label>
+					<label class="wide">Términos excluidos <span>Separados por coma</span><input id="excludedInput" placeholder="english c1, inglés c1"></label>
+					<label class="toggle-row"><input id="remoteInput" type="checkbox"><span><strong>Aceptar vacantes remotas</strong><small>Cuenta remoto/teletrabajo como coincidencia de ubicación.</small></span></label>
+					<div class="profile-actions"><span id="profileMessage">Los cambios se guardan únicamente en SQLite local.</span><button class="button primary" type="submit">Guardar perfil</button></div>
+				</form>
 			</section>
 		</main>
 	</div>
