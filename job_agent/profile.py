@@ -33,6 +33,10 @@ class UserProfile(BaseModel):
 	excluded_terms: list[str] = Field(default_factory=lambda: ["english c1", "inglés c1"])
 	automation_enabled: bool = True
 
+	# User-authored context that complements the uploaded CV. It is not treated as
+	# independently verified employment history or as proof of a skill.
+	professional_summary: str = Field(default="", max_length=12000)
+
 	# Application-specific facts. Empty means unknown and must never be invented.
 	city: str = Field(default="", max_length=160)
 	english_level: str = Field(default="", max_length=80)
@@ -66,6 +70,22 @@ class UserProfile(BaseModel):
 	@classmethod
 	def clean_optional_text(cls, value: str) -> str:
 		return " ".join(value.strip().split())
+
+	@field_validator("professional_summary")
+	@classmethod
+	def clean_professional_summary(cls, value: str) -> str:
+		# Preserve paragraph boundaries while removing accidental trailing spaces.
+		lines = [line.strip() for line in value.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+		cleaned: list[str] = []
+		previous_blank = False
+		for line in lines:
+			if line:
+				cleaned.append(line)
+				previous_blank = False
+			elif cleaned and not previous_blank:
+				cleaned.append("")
+				previous_blank = True
+		return "\n".join(cleaned).strip()
 
 	@model_validator(mode="after")
 	def validate_thresholds(self) -> UserProfile:
