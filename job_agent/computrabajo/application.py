@@ -18,25 +18,29 @@ DEFAULT_PROFILE_DIR = Path("data/browser-profile")
 
 
 class ApplicationQuestion(BaseModel):
-	"""One field or question found in a job application flow."""
+	"""One application field together with the answer that was used or proposed."""
 
 	question: str = Field(min_length=1, max_length=1000)
 	field_type: str = Field(default="text", max_length=80)
 	options: list[str] = Field(default_factory=list)
 	suggested_answer: str = Field(default="", max_length=4000)
 	confidence: int = Field(default=0, ge=0, le=100)
-	requires_user_input: bool = True
+	requires_user_input: bool = False
 	note: str = Field(default="", max_length=1000)
 
 
 class ApplicationDraftOutput(BaseModel):
-	"""Structured, non-submitted application preparation result."""
+	"""Structured result of one full application attempt."""
 
 	questions: list[ApplicationQuestion] = Field(default_factory=list)
 	application_url: str = ""
 	login_required: bool = False
 	blocked_reason: str = ""
 	summary: str = ""
+	submitted: bool = False
+	submission_status: str = "not_submitted"
+	confirmation_text: str = ""
+	confirmation_url: str = ""
 
 
 class PreparationStatus(BaseModel):
@@ -44,10 +48,11 @@ class PreparationStatus(BaseModel):
 	job_id: int | None = None
 	message: str = ""
 	questions: int = 0
+	submitted: bool = False
 
 
 class AssistedApplicationPreparer:
-	"""Inspects an application flow and prepares answers without submitting it."""
+	"""Completes a Computrabajo application using local profile data and saved answers."""
 
 	def __init__(self, store: JobStore | None = None, profile_dir: Path | str = DEFAULT_PROFILE_DIR) -> None:
 		self.store = store or JobStore()
@@ -71,9 +76,9 @@ class AssistedApplicationPreparer:
 			self._status = PreparationStatus(
 				state="running",
 				job_id=job_id,
-				message="Abriendo la vacante y revisando el flujo de postulación…",
+				message="Abriendo la vacante, completando el formulario y enviando la postulación…",
 			)
-		threading.Thread(target=self._worker, args=(job_id,), daemon=True, name="application-preparer").start()
+		threading.Thread(target=self._worker, args=(job_id,), daemon=True, name="application-runner").start()
 		return True
 
 	def _worker(self, job_id: int) -> None:
@@ -81,25 +86,38 @@ class AssistedApplicationPreparer:
 			job = self.store.get_job(job_id)
 			if not job:
 				raise RuntimeError("Vacante no encontrada.")
-			result = asyncio.run(self._prepare(job))
-			self.store.save_application_draft(job_id, result.model_dump())
+			result = asyncio.run(self._apply(job))
+			payload = result.model_dump()
+			self.store.save_application_draft(job_id, payload)
+			self.store.save_application_attempt(job_id, payload)
+			if result.submitted:
+				self.store.update_status(job_id, "applied")
+			message = (
+				result.confirmation_text
+				if result.submitted and result.confirmation_text
+				else "Postulación enviada correctamente."
+				if result.submitted
+				else result.blocked_reason or "La postulación no pudo completarse."
+			)
 			with self._lock:
 				self._status = PreparationStatus(
 					state="completed",
 					job_id=job_id,
 					questions=len(result.questions),
-					message=(result.blocked_reason or f"Borrador preparado con {len(result.questions)} preguntas/campos."),
+					submitted=result.submitted,
+					message=message,
 				)
 		except Exception as exc:
 			with self._lock:
 				self._status = PreparationStatus(state="error", job_id=job_id, message=str(exc))
 
-	async def _prepare(self, job: dict[str, object]) -> ApplicationDraftOutput:
+	async def _apply(self, job: dict[str, object]) -> ApplicationDraftOutput:
 		load_dotenv()
 		if not os.getenv("BROWSER_USE_API_KEY"):
-			raise RuntimeError("Falta BROWSER_USE_API_KEY. Agrégala al archivo .env para preparar postulaciones.")
+			raise RuntimeError("Falta BROWSER_USE_API_KEY. Agrégala al archivo .env para realizar postulaciones.")
 
 		profile = self.profile_store.get()
+		saved_draft = self.store.get_application_draft(int(job["id"])) or {}
 		browser = Browser(
 			user_data_dir=str(self.profile_dir.resolve()),
 			headless=False,
@@ -107,50 +125,61 @@ class AssistedApplicationPreparer:
 		)
 		try:
 			agent = Agent(
-				task=self._build_task(job, profile.model_dump()),
+				task=self._build_task(job, profile.model_dump(), saved_draft),
 				llm=ChatBrowserUse(),
 				browser=browser,
 				output_model_schema=ApplicationDraftOutput,
 				use_vision="auto",
 				extend_system_message=(
-					"You are preparing a draft only. You may inspect an application form when opening it is clearly non-submitting. "
-					"Never submit an application, never click a final submit/send/apply confirmation, never send a message, "
-					"never change account/profile data, and never bypass CAPTCHA, 2FA, bot detection, or access controls. "
-					"Do not invent personal facts. Mark unknown personal answers as requires_user_input=true."
+					"Complete the user's job application on Computrabajo and submit it when the required fields can be answered "
+					"from the supplied local profile, saved answers, or unambiguous page context. Record every answer actually used. "
+					"Do not invent personal facts, qualifications, employment history, salary facts, legal declarations, or answers "
+					"that are not supported by the supplied data. Never bypass CAPTCHA, 2FA, bot detection, or access controls. "
+					"If such a challenge blocks the application, stop and report it accurately."
 				),
 			)
-			history = await agent.run(max_steps=45)
+			history = await agent.run(max_steps=70)
 			output = history.structured_output
 			if output is None:
-				raise RuntimeError(f"No se pudo generar un borrador estructurado. Resultado: {(history.final_result() or '')[:300]}")
+				raise RuntimeError(f"No se pudo obtener un resultado estructurado. Resultado: {(history.final_result() or '')[:300]}")
 			return output if isinstance(output, ApplicationDraftOutput) else ApplicationDraftOutput.model_validate(output)
 		finally:
 			await browser.stop()
 
 	@staticmethod
-	def _build_task(job: dict[str, object], profile: dict[str, object]) -> str:
+	def _build_task(job: dict[str, object], profile: dict[str, object], saved_draft: dict[str, object]) -> str:
 		return f"""
 Open this Computrabajo vacancy: {job.get('url', '')}
 
-Goal: inspect the application flow and PREPARE a draft of answers. Do not submit anything.
-If the application form can be opened without creating/submitting an application, inspect its visible fields and questions. If opening it might itself submit/create the application, do not click it; report that in blocked_reason.
+Goal: COMPLETE AND SUBMIT the job application for the user.
 
-For every visible application question or field, return:
+Use the local candidate profile and any previously saved draft answers below. A saved answer takes precedence when it clearly corresponds to the same question. Navigate the application flow, fill every answer you can support, continue through intermediate steps, and click the final application/submit/confirm action when the form is ready.
+
+For every application question or field encountered, record in the final structured output:
 - exact question/label
 - field type
 - selectable options if present
-- a suggested answer only when supported by the local profile or vacancy data
+- the answer actually entered/selected
 - confidence 0-100
-- requires_user_input=true when the answer needs information not present in the profile
-- a short note explaining uncertainty when useful
+- requires_user_input=false when it was completed successfully
+- a short note when useful
 
-Local candidate profile (use only these facts; do not invent missing facts):
+After the final action, verify whether Computrabajo shows a success/confirmation state. Set submitted=true only when there is positive evidence that the application was submitted. Capture confirmation_text and confirmation_url when available.
+
+Local candidate profile:
 {profile}
+
+Previously saved answers/draft:
+{saved_draft}
 
 Vacancy title: {job.get('title', '')}
 Company: {job.get('company', '')}
 Location: {job.get('location', '')}
 Stored description: {job.get('description', '')}
 
-Never submit, confirm, send, apply, upload/replace a CV, alter profile/account data, or answer CAPTCHA/2FA. Stop before any action that can create or finalize an application.
+Important constraints:
+- Never invent facts about the user.
+- Never bypass CAPTCHA, 2FA, bot detection, or another access control. If one blocks the flow, stop and set blocked_reason.
+- Do not alter unrelated account/profile settings.
+- Avoid duplicate submission if the page already indicates this vacancy was previously applied to; report that state instead.
 """.strip()
