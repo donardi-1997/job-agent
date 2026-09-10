@@ -1,9 +1,12 @@
 const $ = (selector) => document.querySelector(selector);
 
-async function fetchJson(url) {
-	const response = await fetch(url);
-	if (!response.ok) throw new Error(`HTTP ${response.status}`);
-	return response.json();
+let statusPoll = null;
+
+async function fetchJson(url, options = undefined) {
+	const response = await fetch(url, options);
+	const payload = await response.json().catch(() => ({}));
+	if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+	return payload;
 }
 
 function renderStats(stats) {
@@ -46,6 +49,23 @@ function renderJobs(jobs) {
 	}
 }
 
+function renderSearchStatus(status) {
+	const box = $('#searchStatus');
+	const button = $('#searchButton');
+	box.dataset.state = status.state || 'idle';
+	button.disabled = status.state === 'running';
+	button.textContent = status.state === 'running' ? 'Buscando…' : 'Iniciar búsqueda';
+
+	const titles = {
+		idle: 'Agente listo',
+		running: 'Búsqueda en ejecución',
+		completed: 'Búsqueda completada',
+		error: 'La búsqueda necesita atención',
+	};
+	$('#searchStatusTitle').textContent = titles[status.state] || 'Estado del agente';
+	$('#searchStatusMessage').textContent = status.message || 'Configura tu búsqueda y ejecútala cuando quieras.';
+}
+
 async function loadDashboard() {
 	const minScore = Number($('#scoreFilter').value || 0);
 	const status = $('#statusFilter').value;
@@ -53,18 +73,64 @@ async function loadDashboard() {
 	if (status) query.set('status', status);
 
 	try {
-		const [stats, jobs] = await Promise.all([
+		const [stats, jobs, searchStatus] = await Promise.all([
 			fetchJson('/api/stats'),
 			fetchJson(`/api/jobs?${query.toString()}`),
+			fetchJson('/api/search/status'),
 		]);
 		renderStats(stats);
 		renderJobs(jobs);
+		renderSearchStatus(searchStatus);
 	} catch (error) {
 		console.error('Unable to load dashboard', error);
 	}
 }
 
+async function pollSearchStatus() {
+	try {
+		const status = await fetchJson('/api/search/status');
+		renderSearchStatus(status);
+		if (status.state !== 'running') {
+			if (statusPoll) window.clearInterval(statusPoll);
+			statusPoll = null;
+			await loadDashboard();
+		}
+	} catch (error) {
+		console.error('Unable to poll search status', error);
+	}
+}
+
+async function startSearch(event) {
+	event.preventDefault();
+	const payload = {
+		keyword: $('#keywordInput').value.trim(),
+		location: $('#locationInput').value.trim(),
+		max_results: Number($('#maxResultsInput').value),
+	};
+
+	try {
+		const status = await fetchJson('/api/search', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload),
+		});
+		renderSearchStatus(status);
+		if (statusPoll) window.clearInterval(statusPoll);
+		statusPoll = window.setInterval(pollSearchStatus, 1500);
+	} catch (error) {
+		renderSearchStatus({ state: 'error', message: error.message });
+	}
+}
+
 $('#refreshButton').addEventListener('click', loadDashboard);
+$('#focusSearchButton').addEventListener('click', () => {
+	$('#search').scrollIntoView({ behavior: 'smooth', block: 'center' });
+	$('#keywordInput').focus();
+});
+$('#searchForm').addEventListener('submit', startSearch);
 $('#scoreFilter').addEventListener('change', loadDashboard);
 $('#statusFilter').addEventListener('change', loadDashboard);
-loadDashboard();
+loadDashboard().then(async () => {
+	const status = await fetchJson('/api/search/status').catch(() => null);
+	if (status?.state === 'running') statusPoll = window.setInterval(pollSearchStatus, 1500);
+});
