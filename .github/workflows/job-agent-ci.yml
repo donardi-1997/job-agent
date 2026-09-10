@@ -1,0 +1,73 @@
+name: Job Agent CI
+
+on:
+  pull_request:
+    branches:
+      - develop/computrabajo-agent
+    paths:
+      - 'job_agent/**'
+      - 'tests/job_agent/**'
+      - 'run_job_agent.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/job-agent-ci.yml'
+  push:
+    branches:
+      - develop/computrabajo-agent
+      - 'improve/**'
+    paths:
+      - 'job_agent/**'
+      - 'tests/job_agent/**'
+      - 'run_job_agent.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/job-agent-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: job-agent-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  job-agent-tests:
+    name: SearchJob / Python 3.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      JOB_AGENT_ZERO_COST: '1'
+      JOB_AGENT_SEARCH_AI_FALLBACK: '0'
+      JOB_AGENT_QUESTION_LLM: '0'
+      JOB_AGENT_APPLICATION_AI_FALLBACK: '0'
+      BROWSER_USE_API_KEY: ''
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --dev --extra core --python 3.12 --frozen
+
+      - name: Compile Job Agent
+        run: uv run --no-sync python -m compileall -q job_agent run_job_agent.py
+
+      - name: Verify zero-cost guard configuration
+        shell: bash
+        run: |
+          test "$JOB_AGENT_ZERO_COST" = "1"
+          test "$JOB_AGENT_SEARCH_AI_FALLBACK" = "0"
+          test "$JOB_AGENT_QUESTION_LLM" = "0"
+          test "$JOB_AGENT_APPLICATION_AI_FALLBACK" = "0"
+          test -z "$BROWSER_USE_API_KEY"
+
+      - name: Run SearchJob tests
+        run: uv run --no-sync pytest tests/job_agent -q
