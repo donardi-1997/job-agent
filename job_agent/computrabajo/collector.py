@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator
 from browser_use import Agent, Browser
 from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse
 from job_agent.computrabajo.browser_config import allowed_domains
+from job_agent.computrabajo.deterministic import DeterministicComputrabajoSearch, SearchExecutionStore
 from job_agent.profile import ProfileStore
 from job_agent.scoring import JobPosting, score_job
 from job_agent.storage import JobRecord, JobStore
@@ -37,7 +38,7 @@ class SearchRequest(BaseModel):
 
 
 class ExtractedJob(BaseModel):
-	"""One job vacancy extracted from Computrabajo by Browser Use."""
+	"""One normalized Computrabajo vacancy."""
 
 	title: str
 	company: str = ""
@@ -56,24 +57,36 @@ class SearchRunStatus(BaseModel):
 	location: str = ""
 	found: int = 0
 	persisted: int = 0
+	mode: Literal["", "deterministic", "ai_fallback"] = ""
+	fallback_reason: str = ""
 	message: str = ""
 
 
 class ComputrabajoCollector:
-	"""Runs local Browser Use discovery jobs and persists normalized vacancies."""
+	"""Discover vacancies locally first, using an LLM only as a fallback."""
 
 	def __init__(self, store: JobStore | None = None, profile_dir: Path | str = DEFAULT_PROFILE_DIR) -> None:
 		self.store = store or JobStore()
 		self.profile_store = ProfileStore(self.store.path)
 		self.usage_store = AIUsageStore(self.store.path)
+		self.search_execution_store = SearchExecutionStore(self.store.path)
 		self.profile_dir = Path(profile_dir)
 		self.profile_dir.mkdir(parents=True, exist_ok=True)
+		self.deterministic_search = DeterministicComputrabajoSearch(self.profile_dir)
 		self._lock = threading.Lock()
 		self._status = SearchRunStatus()
+		self._last_collection_mode: Literal["", "deterministic", "ai_fallback"] = ""
+		self._last_fallback_reason = ""
 
 	def status(self) -> dict[str, object]:
 		with self._lock:
 			return self._status.model_dump()
+
+	def last_collection_info(self) -> dict[str, str]:
+		return {"mode": self._last_collection_mode, "fallback_reason": self._last_fallback_reason}
+
+	def search_efficiency(self) -> dict[str, object]:
+		return self.search_execution_store.summary()
 
 	def start(self, request: SearchRequest) -> bool:
 		with self._lock:
@@ -83,7 +96,7 @@ class ComputrabajoCollector:
 				state="running",
 				keyword=request.keyword,
 				location=request.location,
-				message="Abriendo Computrabajo en el navegador local…",
+				message="Buscando primero con extracción local sin IA…",
 			)
 		threading.Thread(target=self._worker, args=(request,), daemon=True, name="computrabajo-search").start()
 		return True
@@ -92,6 +105,9 @@ class ComputrabajoCollector:
 		try:
 			result = asyncio.run(self._collect(request))
 			persisted = self._persist(result.jobs)
+			info = self.last_collection_info()
+			mode = info["mode"]
+			label = "sin IA" if mode == "deterministic" else "con fallback de IA"
 			with self._lock:
 				self._status = SearchRunStatus(
 					state="completed",
@@ -99,16 +115,83 @@ class ComputrabajoCollector:
 					location=request.location,
 					found=len(result.jobs),
 					persisted=persisted,
-					message=f"Búsqueda terminada: {len(result.jobs)} vacantes encontradas.",
+					mode=mode,
+					fallback_reason=info["fallback_reason"],
+					message=f"Búsqueda terminada {label}: {len(result.jobs)} vacantes encontradas.",
 				)
 		except Exception as exc:
+			info = self.last_collection_info()
 			with self._lock:
-				self._status = SearchRunStatus(state="error", keyword=request.keyword, location=request.location, message=str(exc))
+				self._status = SearchRunStatus(
+					state="error",
+					keyword=request.keyword,
+					location=request.location,
+					mode=info["mode"],
+					fallback_reason=info["fallback_reason"],
+					message=str(exc),
+				)
+
+	def _record_search_execution(self, request: SearchRequest, mode: str, found: int, fallback_reason: str = "") -> None:
+		try:
+			self.search_execution_store.record(
+				keyword=request.keyword,
+				location=request.location,
+				mode=mode,
+				found=found,
+				fallback_reason=fallback_reason,
+			)
+		except Exception:
+			# Telemetry must never break job discovery.
+			pass
 
 	async def _collect(self, request: SearchRequest) -> SearchOutput:
+		"""Try deterministic Chrome/CDP extraction, then optionally fall back to Browser Use AI."""
 		load_dotenv()
+		self._last_collection_mode = ""
+		self._last_fallback_reason = ""
+		fallback_reason = ""
+		try:
+			deterministic = await self.deterministic_search.collect(
+				keyword=request.keyword,
+				location=request.location,
+				max_results=request.max_results,
+			)
+			if deterministic.jobs:
+				output = SearchOutput(
+					jobs=[
+						ExtractedJob(
+							title=job.title,
+							company=job.company,
+							location=job.location,
+							description=job.description,
+							url=job.url,
+						)
+						for job in deterministic.jobs
+					]
+				)
+				self._last_collection_mode = "deterministic"
+				self._record_search_execution(request, "deterministic", len(output.jobs))
+				return output
+			fallback_reason = deterministic.reason or "La extracción determinística no devolvió vacantes."
+		except Exception as exc:
+			fallback_reason = f"{type(exc).__name__}: {exc}"
+
+		self._last_fallback_reason = fallback_reason
+		fallback_enabled = os.getenv("JOB_AGENT_SEARCH_AI_FALLBACK", "1").strip().casefold() not in {"0", "false", "no", "off"}
+		if not fallback_enabled:
+			raise RuntimeError(f"Búsqueda local sin resultados y fallback de IA desactivado. {fallback_reason}")
 		if not os.getenv("BROWSER_USE_API_KEY"):
-			raise RuntimeError("Falta BROWSER_USE_API_KEY. Agrégala al archivo .env para usar Browser Use.")
+			raise RuntimeError(
+				"La búsqueda determinística no pudo extraer vacantes y no hay BROWSER_USE_API_KEY para el fallback de IA. "
+				f"Detalle: {fallback_reason}"
+			)
+
+		output = await self._collect_with_ai(request)
+		self._last_collection_mode = "ai_fallback"
+		self._record_search_execution(request, "ai_fallback", len(output.jobs), fallback_reason)
+		return output
+
+	async def _collect_with_ai(self, request: SearchRequest) -> SearchOutput:
 		browser = Browser(
 			user_data_dir=str(self.profile_dir.resolve()),
 			headless=False,
@@ -134,7 +217,12 @@ class ComputrabajoCollector:
 				self.usage_store.record_safely(
 					"search",
 					llm.snapshot(),
-					metadata={"keyword": request.keyword, "location": request.location},
+					metadata={
+						"keyword": request.keyword,
+						"location": request.location,
+						"mode": "ai_fallback",
+						"fallback_reason": self._last_fallback_reason,
+					},
 				)
 			output = history.structured_output
 			if output is None:
