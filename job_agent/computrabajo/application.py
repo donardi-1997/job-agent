@@ -122,6 +122,8 @@ class AssistedApplicationPreparer:
 			raise RuntimeError("Falta BROWSER_USE_API_KEY. Agrégala al archivo .env para realizar postulaciones.")
 
 		profile = self.profile_store.get()
+		if not profile.automation_enabled:
+			raise RuntimeError("La automatización está desactivada. No se inició una nueva postulación.")
 		saved_draft = self.store.get_application_draft(int(job["id"])) or {}
 		known_answers = self.answer_memory.context_for_agent(profile)
 		browser = Browser(
