@@ -16,6 +16,7 @@ def test_profile_store_round_trip(tmp_path: Path) -> None:
 		remote_ok=True,
 		min_score=65,
 		prepare_application_score=88,
+		professional_summary="Backend developer focused on Python and AWS.\n\nI build automation and AI/RAG projects.",
 		city="Bogotá",
 		english_level="B1",
 		salary_expectation="4.000.000 COP",
@@ -33,6 +34,7 @@ def test_profile_store_round_trip(tmp_path: Path) -> None:
 	assert loaded.years_experience == 2.5
 	assert loaded.min_score == 65
 	assert loaded.prepare_application_score == 88
+	assert loaded.professional_summary == "Backend developer focused on Python and AWS.\n\nI build automation and AI/RAG projects."
 	assert loaded.city == "Bogotá"
 	assert loaded.english_level == "B1"
 	assert loaded.salary_expectation == "4.000.000 COP"
@@ -49,6 +51,9 @@ def test_profile_validates_numeric_ranges_and_thresholds() -> None:
 
 	with pytest.raises(ValidationError):
 		UserProfile(min_score=90, prepare_application_score=80)
+
+	with pytest.raises(ValidationError):
+		UserProfile(professional_summary="x" * 12001)
 
 
 def test_frequent_answer_requires_question_and_answer() -> None:
