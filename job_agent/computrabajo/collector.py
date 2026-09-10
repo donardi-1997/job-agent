@@ -151,11 +151,17 @@ Return only actual vacancies on co.computrabajo.com.
 		records: list[JobRecord] = []
 		for item in jobs:
 			url = str(item.url)
-			match = score_job(
-				JobPosting(title=item.title, company=item.company, location=item.location, description=item.description, url=url),
-				profile,
-				preferences,
+			posting = JobPosting(
+				title=item.title,
+				company=item.company,
+				location=item.location,
+				description=item.description,
+				url=url,
 			)
+			match = score_job(posting, profile, preferences)
+			text = f"{item.title} {item.description}".casefold()
+			matched_skills = tuple(skill for skill in profile.skills if skill.casefold() in text)
+			missing_skills = tuple(skill for skill in profile.skills if skill.casefold() not in text)
 			records.append(
 				JobRecord(
 					id=None,
@@ -168,6 +174,10 @@ Return only actual vacancies on co.computrabajo.com.
 					score=match.score,
 					band=match.decision,
 					status="discovered",
+					description=item.description,
+					match_reasons=match.reasons,
+					matched_skills=matched_skills,
+					missing_skills=missing_skills,
 				)
 			)
 		return self.store.upsert_jobs(records)
