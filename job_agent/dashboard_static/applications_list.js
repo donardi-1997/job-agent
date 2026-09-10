@@ -70,6 +70,17 @@
 			metric.addEventListener('click', () => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 		}
 
+		const appliedMetric = document.querySelector('#appliedMetric');
+		if (appliedMetric) {
+			let previous = appliedMetric.textContent;
+			new MutationObserver(() => {
+				if (appliedMetric.textContent !== previous) {
+					previous = appliedMetric.textContent;
+					load();
+				}
+			}).observe(appliedMetric, { childList: true, characterData: true, subtree: true });
+		}
+
 		load();
 		document.querySelector('#refreshButton')?.addEventListener('click', load);
 	}
