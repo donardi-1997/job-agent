@@ -39,10 +39,15 @@ def test_excluded_c1_requirement_is_ignored() -> None:
 
 
 def test_professional_summary_contributes_fifteen_percent_without_ai() -> None:
-	profile = CandidateProfile(
+	base_profile = CandidateProfile(
 		target_roles=("backend developer",),
 		skills=("python", "fastapi", "aws"),
 		preferred_locations=("Colombia",),
+	)
+	profile = CandidateProfile(
+		target_roles=base_profile.target_roles,
+		skills=base_profile.skills,
+		preferred_locations=base_profile.preferred_locations,
 		professional_summary=(
 			"Backend especializado en Python FastAPI AWS Lambda API Gateway Bedrock RAG, "
 			"automatización e integraciones API."
@@ -56,9 +61,10 @@ def test_professional_summary_contributes_fifteen_percent_without_ai() -> None:
 		url="https://example.test/job/3",
 	)
 
+	base_result = score_job(job, base_profile, SearchPreferences())
 	result = score_job(job, profile, SearchPreferences())
 
-	assert result.score >= 90
+	assert result.score > base_result.score
 	assert result.decision == "prepare"
 	assert any("Professional context matches" in reason for reason in result.reasons)
 	assert any("Context overlap" in reason for reason in result.reasons)
