@@ -1,22 +1,22 @@
 # Job Agent — Computrabajo
 
-Local-first job discovery and assisted-application app built on top of `browser-use` 0.13.10.
+Local-first job discovery and auto-application app built on top of `browser-use` 0.13.10.
 
 ## What works now
 
 1. Run the dashboard locally on `127.0.0.1`.
 2. Configure an editable candidate profile directly from the dashboard.
-3. Persist roles, skills, locations, experience and scoring thresholds in local SQLite.
-4. Start a real Browser Use search on `co.computrabajo.com`.
-5. Extract, deduplicate and score vacancies against the locally saved profile.
-6. Review each vacancy in a detail drawer with strengths, gaps, score reasons and description.
-7. Save or discard individual vacancies without losing the decision on future searches.
-8. Prepare an assisted application draft for a vacancy.
-9. Inspect visible application questions/fields when this can be done without submitting or creating the application.
-10. Store suggested answers, options, confidence and `requires_user_input` flags in SQLite.
-11. Reopen an existing draft without running Browser Use again.
-12. Keep a persistent browser profile under `data/browser-profile`.
-13. Never submit an application automatically.
+3. Persist roles, skills, locations, experience, salary, availability, language level and frequent answers in local SQLite.
+4. Start real Browser Use searches on `co.computrabajo.com`.
+5. Extract, deduplicate and score vacancies against the local profile.
+6. Review each vacancy with strengths, gaps, score reasons and description.
+7. Save or discard vacancies without losing that decision on later searches.
+8. Submit an individual application automatically when required answers can be supported by stored data.
+9. Save every answer used, submission result and confirmation evidence.
+10. Run autonomous search + auto-apply batches with a score threshold, per-run quota and daily submission limit.
+11. Skip vacancies already marked `applied` or `ignored`.
+12. Keep batch history and application-attempt history in SQLite.
+13. Keep a persistent browser profile under `data/browser-profile`.
 
 ## Local setup
 
@@ -32,7 +32,7 @@ Create a local `.env` file with the Browser Use API key:
 BROWSER_USE_API_KEY=your_key_here
 ```
 
-Candidate matching configuration no longer needs to live in `.env`; edit it from **Mi perfil** in the dashboard. The profile, application drafts, SQLite database and browser state remain under the gitignored `data/` directory.
+Candidate and application data is configured from **Mi perfil**. The profile, answers, SQLite database and browser state remain under the gitignored `data/` directory.
 
 Start the application:
 
@@ -46,68 +46,68 @@ The dashboard opens automatically at:
 http://127.0.0.1:8765
 ```
 
-## Assisted application mode
+## Automatic application mode
 
-Open a vacancy with **Revisar** and click **Preparar postulación**. Browser Use opens the vacancy in the same persistent local browser profile and attempts to inspect the application flow.
+Open a vacancy with **Revisar** and click **Postular automáticamente**. Browser Use opens the vacancy with the persistent local browser profile, navigates the application flow, fills supported answers, submits the application and verifies the confirmation state.
 
-The preparer may open an application form only when doing so is clearly non-submitting. It must stop if opening or advancing the flow could create/finalize an application, or if CAPTCHA, 2FA, bot detection or another access control blocks the flow.
+Every encountered question and answer is stored. `submitted=true` is recorded only when Browser Use reports positive evidence that Computrabajo accepted the application. Successful submissions update the vacancy to `applied`.
 
-For every visible field/question, the stored draft can contain:
+The agent may use only facts supplied by the local profile, saved answers or unambiguous page context. It must not invent personal information, qualifications, employment history, legal declarations or salary facts.
 
-- exact label/question;
-- field type;
-- selectable options;
-- suggested answer;
-- confidence from 0 to 100;
-- whether user input is required;
-- a note explaining uncertainty.
+## Autonomous batch mode
 
-The agent must not invent missing personal facts. Unknown answers remain marked for manual review. The dashboard does not expose any final submit action.
+The **Buscar y postular en lote** panel combines discovery and application into one run. Configure:
+
+- keyword and location;
+- maximum search results (1–50);
+- minimum compatibility score;
+- maximum applications for that run (1–25);
+- daily confirmed-submission limit (1–50).
+
+The runner searches first, persists/scorers results, selects only vacancies from that search meeting the threshold, excludes `applied` and `ignored`, then processes the remaining jobs sequentially. Sequential execution avoids Chromium profile conflicts.
+
+The daily limit is based on successful application attempts recorded for the local calendar day. Batch history stores found, eligible, attempted, submitted, blocked/error counts and final state.
+
+If CAPTCHA, 2FA, bot detection or another access-control challenge blocks an application, Job Agent does not bypass it. The batch stops on a detected access-control block rather than repeatedly triggering the same challenge.
 
 ## Browser concurrency
 
-Discovery searches and application preparation share the same persistent Chromium profile. The dashboard therefore serializes them: a search cannot start while a preparation is running, and a preparation cannot start while a search is running.
+Discovery, individual applications and batch auto-apply share the same persistent Chromium profile. The dashboard serializes these operations so only one browser workflow owns the profile at a time.
 
 ## Dashboard API
 
-- `POST /api/search` — starts a background Computrabajo search.
+- `POST /api/search` — starts a discovery search.
 - `GET /api/search/status` — returns discovery status.
+- `POST /api/batch` — starts search + autonomous batch application.
+- `GET /api/batch/status` — returns live batch progress.
+- `GET /api/batch/history` — returns persisted batch history.
 - `GET /api/jobs` — returns locally stored vacancies.
 - `GET /api/jobs/{id}` — returns full vacancy detail.
-- `POST /api/jobs/{id}/status` — saves a manual review status.
-- `POST /api/jobs/{id}/prepare` — starts assisted application preparation.
-- `GET /api/jobs/{id}/draft` — loads the saved application draft.
-- `GET /api/prepare/status` — returns preparation status.
+- `POST /api/jobs/{id}/status` — changes a review state.
+- `POST /api/jobs/{id}/prepare` — starts an individual automatic application.
+- `GET /api/jobs/{id}/draft` — loads the latest stored answers/result.
+- `POST /api/jobs/{id}/draft` — edits locally stored answers.
+- `GET /api/jobs/{id}/attempts` — returns application-attempt history.
+- `GET /api/prepare/status` — returns individual-application status.
 - `GET /api/stats` — returns dashboard KPIs.
-- `GET /api/profile` — loads the locally persisted candidate profile.
+- `GET /api/profile` — loads the local candidate profile.
 - `POST /api/profile` — validates and saves the candidate profile.
 
-## Safety defaults
+## Safety constraints
 
-- `auto_submit = False`
-- no final application submission;
-- no profile/account modification;
-- no CV replacement/upload during preparation;
-- no message sending;
-- no CAPTCHA/2FA/anti-bot bypass;
 - no invented personal facts;
-- mandatory human review of suggested answers.
+- no CAPTCHA, 2FA, anti-bot or access-control bypass;
+- no unrelated profile/account modification;
+- duplicate applications are skipped when local state already says `applied`;
+- success is recorded only when there is positive submission evidence.
 
 ## Decision bands
 
 - `< min_score`: ignore
 - `min_score–74`: save
 - `75–prepare_application_score-1`: recommend
-- `>= prepare_application_score`: prepare application
-
-## Next milestones
-
-- Add richer application-profile fields such as salary expectation, availability and language level so more answers can be suggested safely.
-- Let the user edit draft answers locally before opening Computrabajo.
-- Search history and per-run metrics.
-- Application pipeline states and response/interview analytics.
-- A later controlled fill mode, still requiring explicit final human submission.
+- `>= prepare_application_score`: auto-apply candidate
 
 ## Development branch
 
-All current Job Agent work lives on `develop/computrabajo-agent`. Keep upstream-derived Browser Use code isolated from application-specific code where practical so future upstream updates remain manageable.
+All current Job Agent work lives on `develop/computrabajo-agent`. Upstream-derived Browser Use code remains isolated from application-specific code where practical so future upstream updates remain manageable.
