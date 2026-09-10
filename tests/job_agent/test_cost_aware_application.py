@@ -25,6 +25,8 @@ async def test_unknown_question_uses_compact_resolver_then_deterministic_replay(
     store = JobStore(tmp_path / "jobs.db")
     preparer = CostAwareApplicationPreparer(store=store, profile_dir=tmp_path / "browser")
     preparer.mode_store.set("real")
+    monkeypatch.setenv("JOB_AGENT_ZERO_COST", "0")
+    monkeypatch.setenv("JOB_AGENT_QUESTION_LLM", "1")
     monkeypatch.setenv("BROWSER_USE_API_KEY", "test-key")
 
     field = ObservedField(
@@ -124,6 +126,8 @@ async def test_unsupported_new_question_stops_without_full_browser_agent(
     store = JobStore(tmp_path / "jobs.db")
     preparer = CostAwareApplicationPreparer(store=store, profile_dir=tmp_path / "browser")
     preparer.mode_store.set("real")
+    monkeypatch.setenv("JOB_AGENT_ZERO_COST", "0")
+    monkeypatch.setenv("JOB_AGENT_QUESTION_LLM", "1")
     monkeypatch.setenv("BROWSER_USE_API_KEY", "test-key")
 
     class Runner:
