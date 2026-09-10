@@ -76,6 +76,7 @@ class JobStore:
 		self.path = Path(path)
 		self.path.parent.mkdir(parents=True, exist_ok=True)
 		self._init_schema()
+		self.reconcile_application_statuses()
 
 	def connect(self) -> sqlite3.Connection:
 		connection = sqlite3.connect(self.path)
@@ -172,6 +173,65 @@ class JobStore:
 				data[key] = []
 		return data
 
+	@staticmethod
+	def _payload_confirms_real_submission(payload: dict[str, object]) -> bool:
+		"""Recognize positive submission evidence while never promoting TEST attempts."""
+		mode = str(payload.get("mode") or "").strip().casefold()
+		if mode == "test" or bool(payload.get("test_mode")):
+			return False
+		if bool(payload.get("submitted")):
+			return True
+		status = str(payload.get("submission_status") or "").strip().casefold()
+		if status in {"submitted", "already_applied"}:
+			return True
+		confirmation = " ".join(str(payload.get("confirmation_text") or "").casefold().split())
+		markers = (
+			"postulación enviada",
+			"postulacion enviada",
+			"postulación realizada",
+			"postulacion realizada",
+			"candidatura enviada",
+			"aplicación enviada",
+			"aplicacion enviada",
+			"te has postulado correctamente",
+			"postulación exitosa",
+			"postulacion exitosa",
+			"ya te postulaste",
+			"ya has aplicado",
+			"ya estás postulado",
+			"ya estas postulado",
+		)
+		return any(marker in confirmation for marker in markers)
+
+	def reconcile_application_statuses(self) -> int:
+		"""Repair jobs whose persisted non-TEST attempts already prove submission."""
+		with self.connect() as connection:
+			rows = connection.execute(
+				"SELECT job_id, payload, submitted, submission_status, confirmation_text FROM application_attempts"
+			).fetchall()
+			confirmed_job_ids: set[int] = set()
+			for row in rows:
+				try:
+					payload = json.loads(str(row["payload"] or "{}"))
+				except json.JSONDecodeError:
+					payload = {}
+				if not isinstance(payload, dict):
+					payload = {}
+				payload.setdefault("submitted", bool(row["submitted"]))
+				payload.setdefault("submission_status", str(row["submission_status"] or ""))
+				payload.setdefault("confirmation_text", str(row["confirmation_text"] or ""))
+				if self._payload_confirms_real_submission(payload):
+					confirmed_job_ids.add(int(row["job_id"]))
+
+			repaired = 0
+			for job_id in confirmed_job_ids:
+				cursor = connection.execute(
+					"UPDATE jobs SET status = 'applied' WHERE id = ? AND status <> 'applied'",
+					(job_id,),
+				)
+				repaired += max(0, cursor.rowcount)
+			return repaired
+
 	def upsert_jobs(self, jobs: Iterable[JobRecord]) -> int:
 		count = 0
 		with self.connect() as connection:
@@ -216,9 +276,13 @@ class JobStore:
 		if status not in ALLOWED_STATUSES:
 			raise ValueError(f"Unsupported status: {status}")
 		with self.connect() as connection:
-			cursor = connection.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
-			if cursor.rowcount == 0:
+			row = connection.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+			if not row:
 				return None
+			current = str(row["status"])
+			if current == "applied" and status != "applied":
+				raise ValueError("Una vacante con postulación confirmada no puede volver a un estado anterior.")
+			connection.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
 		return self.get_job(job_id)
 
 	def save_application_draft(self, job_id: int, payload: dict[str, object]) -> dict[str, object]:
@@ -258,6 +322,12 @@ class JobStore:
 	def save_application_attempt(self, job_id: int, payload: dict[str, object]) -> int:
 		if not self.get_job(job_id):
 			raise ValueError("Vacante no encontrada.")
+		confirmed = self._payload_confirms_real_submission(payload)
+		stored_payload = dict(payload)
+		if confirmed:
+			stored_payload["submitted"] = True
+			if str(stored_payload.get("submission_status") or "") not in {"submitted", "already_applied"}:
+				stored_payload["submission_status"] = "submitted"
 		with self.connect() as connection:
 			cursor = connection.execute(
 				"""
@@ -267,13 +337,15 @@ class JobStore:
 				""",
 				(
 					job_id,
-					json.dumps(payload, ensure_ascii=False),
-					1 if payload.get("submitted") else 0,
-					str(payload.get("submission_status") or "not_submitted"),
-					str(payload.get("confirmation_text") or ""),
-					str(payload.get("confirmation_url") or ""),
+					json.dumps(stored_payload, ensure_ascii=False),
+					1 if confirmed else 0,
+					str(stored_payload.get("submission_status") or "not_submitted"),
+					str(stored_payload.get("confirmation_text") or ""),
+					str(stored_payload.get("confirmation_url") or ""),
 				),
 			)
+			if confirmed:
+				connection.execute("UPDATE jobs SET status = 'applied' WHERE id = ?", (job_id,))
 			return int(cursor.lastrowid)
 
 	def list_application_attempts(self, job_id: int, limit: int = 20) -> list[dict[str, object]]:
