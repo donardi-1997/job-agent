@@ -6,6 +6,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from job_agent.config import CandidateProfile, SearchPreferences
+from job_agent.salary_policy import assess_salary_text
 
 
 PROFESSIONAL_CONTEXT_WEIGHT = 15
@@ -85,6 +86,16 @@ def score_job(
 
 	text = _normalize(f"{job.title} {job.description}")
 	reasons: list[str] = []
+
+	# Salary is a hard eligibility rule rather than a soft scoring factor. We only
+	# reject when the vacancy explicitly advertises a fixed/range maximum below
+	# the user's minimum. Missing salary information is not treated as a rejection.
+	salary = assess_salary_text(
+		f"{job.title} {job.description}",
+		preferences.min_monthly_salary_cop,
+	)
+	if salary.blocked:
+		return MatchResult(0, "ignore", (salary.reason, "Regla salarial dura: no postular por debajo del mínimo mensual configurado.",))
 
 	for excluded in preferences.excluded_terms:
 		if _normalize(excluded) in text:
