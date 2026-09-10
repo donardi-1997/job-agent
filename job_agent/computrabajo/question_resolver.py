@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from browser_use.llm.messages import SystemMessage, UserMessage
 
-from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse, UsageSnapshot
+from job_agent.ai_usage import AIUsageBudget, AIUsageStore, MeteredChatBrowserUse, UsageSnapshot
 from job_agent.profile import UserProfile
 from job_agent.storage import DEFAULT_DB_PATH
 
@@ -62,6 +62,7 @@ class CompactQuestionResolver:
         job: dict[str, object],
         profile: UserProfile,
         questions: list[dict[str, object]],
+        ai_budget: AIUsageBudget | None = None,
     ) -> QuestionResolutionBatch:
         if not questions:
             return QuestionResolutionBatch()
@@ -95,7 +96,11 @@ class CompactQuestionResolver:
                 },
             )
 
-        llm = MeteredChatBrowserUse(model=requested_model, on_usage=persist_usage)
+        llm = MeteredChatBrowserUse(
+            model=requested_model,
+            on_usage=persist_usage,
+            usage_budget=ai_budget,
+        )
         system = SystemMessage(
             content=(
                 "You resolve job-application questions from supplied candidate facts only. "
