@@ -4,7 +4,7 @@ import asyncio
 import atexit
 import threading
 from collections.abc import Coroutine
-from concurrent.futures import Future
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from typing import Any, TypeVar
 
 
@@ -18,7 +18,7 @@ class AsyncRuntime:
     wrapping those operations in asyncio.run() destroys the event loop immediately
     after every job, which can leave Proactor pipe callbacks with a closed loop.
     Keeping one loop alive for the lifetime of Job Agent gives those transports time
-    to finish their normal cleanup and avoids the repeated closed-pipe finalizers.
+    to finish their normal cleanup and avoids repeated closed-pipe finalizers.
     """
 
     def __init__(self, *, thread_name: str = "job-agent-async-runtime") -> None:
@@ -34,9 +34,13 @@ class AsyncRuntime:
         self._ready.wait()
 
     @property
+    def closed(self) -> bool:
+        return self._closed.is_set()
+
+    @property
     def loop(self) -> asyncio.AbstractEventLoop:
         self._ready.wait()
-        if self._loop is None or self._loop.is_closed() or self._closed.is_set():
+        if self._loop is None or self._loop.is_closed() or self.closed:
             raise RuntimeError("Job Agent async runtime is closed.")
         return self._loop
 
@@ -69,8 +73,16 @@ class AsyncRuntime:
 
     def shutdown(self, *, timeout: float = 2.0) -> None:
         loop = self._loop
-        if loop is None or loop.is_closed() or self._closed.is_set():
+        if loop is None or loop.is_closed() or self.closed:
             return
+
+        # Give subprocess/CDP close callbacks one last turn before stopping the
+        # Proactor loop. This is especially relevant for Chromium on Windows.
+        try:
+            asyncio.run_coroutine_threadsafe(asyncio.sleep(0.1), loop).result(timeout=min(timeout, 0.5))
+        except (FutureTimeoutError, RuntimeError):
+            pass
+
         loop.call_soon_threadsafe(loop.stop)
         if threading.current_thread() is not self._thread:
             self._thread.join(timeout=timeout)
@@ -82,9 +94,9 @@ _runtime_lock = threading.Lock()
 
 def get_async_runtime() -> AsyncRuntime:
     global _runtime
-    if _runtime is None or _runtime._closed.is_set():
+    if _runtime is None or _runtime.closed:
         with _runtime_lock:
-            if _runtime is None or _runtime._closed.is_set():
+            if _runtime is None or _runtime.closed:
                 _runtime = AsyncRuntime()
     return _runtime
 
