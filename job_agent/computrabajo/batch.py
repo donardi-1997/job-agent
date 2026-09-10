@@ -19,7 +19,7 @@ class BatchApplyRequest(BaseModel):
 
 	keyword: str = Field(default="", max_length=120)
 	location: str = Field(default="Colombia", min_length=2, max_length=120)
-	max_results: int = Field(default=30, ge=1, le=50)
+	max_results: int = Field(default=100, ge=1, le=200)
 	min_score: int = Field(default=85, ge=0, le=100)
 	max_applications: int = Field(default=10, ge=1, le=25)
 	daily_limit: int = Field(default=20, ge=1, le=50)
