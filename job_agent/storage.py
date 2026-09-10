@@ -69,6 +69,14 @@ class JobStore:
 				CREATE INDEX IF NOT EXISTS idx_jobs_score ON jobs(score DESC);
 				CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 				CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at DESC);
+
+				CREATE TABLE IF NOT EXISTS application_drafts (
+					job_id INTEGER PRIMARY KEY,
+					payload TEXT NOT NULL,
+					created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+				);
 				"""
 			)
 
@@ -141,6 +149,40 @@ class JobStore:
 			if cursor.rowcount == 0:
 				return None
 		return self.get_job(job_id)
+
+	def save_application_draft(self, job_id: int, payload: dict[str, object]) -> dict[str, object]:
+		if not self.get_job(job_id):
+			raise ValueError("Vacante no encontrada.")
+		encoded = json.dumps(payload, ensure_ascii=False)
+		with self.connect() as connection:
+			connection.execute(
+				"""
+				INSERT INTO application_drafts(job_id, payload, created_at, updated_at)
+				VALUES(?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+				ON CONFLICT(job_id) DO UPDATE SET payload=excluded.payload, updated_at=CURRENT_TIMESTAMP
+				""",
+				(job_id, encoded),
+			)
+		return self.get_application_draft(job_id) or {}
+
+	def get_application_draft(self, job_id: int) -> dict[str, object] | None:
+		with self.connect() as connection:
+			row = connection.execute(
+				"SELECT payload, created_at, updated_at FROM application_drafts WHERE job_id = ?",
+				(job_id,),
+			).fetchone()
+		if not row:
+			return None
+		try:
+			payload = json.loads(str(row["payload"]))
+		except json.JSONDecodeError:
+			payload = {}
+		if not isinstance(payload, dict):
+			payload = {}
+		payload["job_id"] = job_id
+		payload["created_at"] = row["created_at"]
+		payload["updated_at"] = row["updated_at"]
+		return payload
 
 	def list_jobs(self, *, limit: int = 100, min_score: int = 0, status: str | None = None) -> list[dict[str, object]]:
 		query = "SELECT * FROM jobs WHERE score >= ?"
