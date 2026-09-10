@@ -10,7 +10,8 @@ from typing import Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
-from browser_use import Agent, Browser, ChatBrowserUse
+from browser_use import Agent, Browser
+from job_agent.ai_usage import AIUsageStore, MeteredChatBrowserUse
 from job_agent.profile import ProfileStore
 from job_agent.scoring import JobPosting, score_job
 from job_agent.storage import JobRecord, JobStore
@@ -18,6 +19,7 @@ from job_agent.storage import JobRecord, JobStore
 
 COMPUTRABAJO_URL = "https://co.computrabajo.com/"
 DEFAULT_PROFILE_DIR = Path("data/browser-profile")
+DEFAULT_BROWSER_MODEL = "bu-2-0"
 
 
 class SearchRequest(BaseModel):
@@ -62,6 +64,7 @@ class ComputrabajoCollector:
 	def __init__(self, store: JobStore | None = None, profile_dir: Path | str = DEFAULT_PROFILE_DIR) -> None:
 		self.store = store or JobStore()
 		self.profile_store = ProfileStore(self.store.path)
+		self.usage_store = AIUsageStore(self.store.path)
 		self.profile_dir = Path(profile_dir)
 		self.profile_dir.mkdir(parents=True, exist_ok=True)
 		self._lock = threading.Lock()
@@ -110,10 +113,11 @@ class ComputrabajoCollector:
 			headless=False,
 			allowed_domains=["co.computrabajo.com"],
 		)
+		llm = MeteredChatBrowserUse(model=os.getenv("JOB_AGENT_BROWSER_MODEL", DEFAULT_BROWSER_MODEL))
 		try:
 			agent = Agent(
 				task=self._build_task(request),
-				llm=ChatBrowserUse(),
+				llm=llm,
 				browser=browser,
 				output_model_schema=SearchOutput,
 				use_vision="auto",
@@ -122,7 +126,14 @@ class ComputrabajoCollector:
 					"or bypass CAPTCHA, 2FA, bot detection, or access controls. Stop if such a challenge blocks discovery."
 				),
 			)
-			history = await agent.run(max_steps=60)
+			try:
+				history = await agent.run(max_steps=60)
+			finally:
+				self.usage_store.record(
+					"search",
+					llm.snapshot(),
+					metadata={"keyword": request.keyword, "location": request.location},
+				)
 			output = history.structured_output
 			if output is None:
 				raise RuntimeError(f"Browser Use no devolvió vacantes estructuradas. Resultado: {(history.final_result() or '')[:300]}")
@@ -138,7 +149,7 @@ Search term: {request.keyword!r}
 Location: {request.location!r}
 Collect up to {request.max_results} distinct, recent and relevant jobs.
 Return exact title, company, displayed location, useful description/requirements summary, and canonical Computrabajo vacancy URL.
-Open vacancy pages when needed for enough description to score the job later.
+Open vacancy pages only when needed for enough description to score the job later; avoid unnecessary navigation.
 Do not apply, do not click any final application/submission button, do not modify the account, and do not send messages.
 If CAPTCHA, 2FA, or anti-bot protection blocks the task, stop instead of bypassing it.
 Return only actual vacancies on co.computrabajo.com.
