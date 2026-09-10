@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import ValidationError
 
-from job_agent.computrabajo import ComputrabajoCollector, SearchRequest
+from job_agent.computrabajo import AssistedApplicationPreparer, ComputrabajoCollector, SearchRequest
 from job_agent.profile import ProfileStore, UserProfile
 from job_agent.storage import JobStore
 
@@ -19,14 +19,18 @@ STATIC_DIR = Path(__file__).with_name("dashboard_static")
 STORE = JobStore()
 PROFILE_STORE = ProfileStore(STORE.path)
 COLLECTOR = ComputrabajoCollector(store=STORE)
+PREPARER = AssistedApplicationPreparer(store=STORE)
 JOB_DETAIL_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)$")
 JOB_STATUS_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/status$")
+JOB_PREPARE_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/prepare$")
+JOB_DRAFT_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/draft$")
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
 	store = STORE
 	profile_store = PROFILE_STORE
 	collector = COLLECTOR
+	preparer = PREPARER
 
 	def _send_json(self, payload: object, status: int = HTTPStatus.OK) -> None:
 		body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -79,6 +83,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 		if parsed.path == "/api/search/status":
 			self._send_json(self.collector.status())
 			return
+		if parsed.path == "/api/prepare/status":
+			self._send_json(self.preparer.status())
+			return
 		if parsed.path == "/api/jobs":
 			query = parse_qs(parsed.query)
 			try:
@@ -97,6 +104,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
 				self._send_json({"error": "Vacante no encontrada."}, HTTPStatus.NOT_FOUND)
 				return
 			self._send_json(job)
+			return
+
+		match = JOB_DRAFT_RE.match(parsed.path)
+		if match:
+			draft = self.store.get_application_draft(int(match.group("job_id")))
+			if not draft:
+				self._send_json({"error": "Aún no hay borrador para esta vacante."}, HTTPStatus.NOT_FOUND)
+				return
+			self._send_json(draft)
 			return
 		self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -126,6 +142,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
 					self._send_json({"error": "Vacante no encontrada."}, HTTPStatus.NOT_FOUND)
 					return
 				self._send_json(job)
+				return
+
+			match = JOB_PREPARE_RE.match(parsed.path)
+			if match:
+				job_id = int(match.group("job_id"))
+				if not self.preparer.start(job_id):
+					self._send_json({"error": "Ya hay una preparación en ejecución.", "status": self.preparer.status()}, HTTPStatus.CONFLICT)
+					return
+				self._send_json(self.preparer.status(), HTTPStatus.ACCEPTED)
 				return
 		except (ValidationError, ValueError, json.JSONDecodeError) as exc:
 			self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
