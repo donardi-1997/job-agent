@@ -10,16 +10,19 @@ from urllib.parse import parse_qs, urlparse
 from pydantic import ValidationError
 
 from job_agent.computrabajo import ComputrabajoCollector, SearchRequest
+from job_agent.profile import ProfileStore, UserProfile
 from job_agent.storage import JobStore
 
 
 STATIC_DIR = Path(__file__).with_name("dashboard_static")
 STORE = JobStore()
+PROFILE_STORE = ProfileStore(STORE.path)
 COLLECTOR = ComputrabajoCollector(store=STORE)
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
 	store = STORE
+	profile_store = PROFILE_STORE
 	collector = COLLECTOR
 
 	def _send_json(self, payload: object, status: int = HTTPStatus.OK) -> None:
@@ -35,10 +38,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 		length = int(self.headers.get("Content-Length", "0"))
 		if length <= 0:
 			return {}
-		if length > 16_384:
+		if length > 32_768:
 			raise ValueError("Request body too large")
-		body = self.rfile.read(length)
-		decoded = json.loads(body.decode("utf-8"))
+		decoded = json.loads(self.rfile.read(length).decode("utf-8"))
 		if not isinstance(decoded, dict):
 			raise ValueError("JSON body must be an object")
 		return decoded
@@ -57,17 +59,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 	def do_GET(self) -> None:  # noqa: N802
 		parsed = urlparse(self.path)
-		if parsed.path == "/":
-			self._send_static("index.html", "text/html; charset=utf-8")
-			return
-		if parsed.path == "/app.css":
-			self._send_static("app.css", "text/css; charset=utf-8")
-			return
-		if parsed.path == "/app.js":
-			self._send_static("app.js", "text/javascript; charset=utf-8")
+		static = {"/": ("index.html", "text/html; charset=utf-8"), "/app.css": ("app.css", "text/css; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8")}
+		if parsed.path in static:
+			self._send_static(*static[parsed.path])
 			return
 		if parsed.path == "/api/stats":
 			self._send_json(self.store.stats())
+			return
+		if parsed.path == "/api/profile":
+			self._send_json(self.profile_store.get().model_dump())
 			return
 		if parsed.path == "/api/search/status":
 			self._send_json(self.collector.status())
@@ -86,24 +86,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 	def do_POST(self) -> None:  # noqa: N802
 		parsed = urlparse(self.path)
-		if parsed.path != "/api/search":
-			self.send_error(HTTPStatus.NOT_FOUND)
-			return
-
 		try:
-			request = SearchRequest.model_validate(self._read_json())
+			body = self._read_json()
+			if parsed.path == "/api/profile":
+				profile = UserProfile.model_validate(body)
+				if profile.prepare_application_score < profile.min_score:
+					raise ValueError("prepare_application_score must be greater than or equal to min_score")
+				self._send_json(self.profile_store.save(profile).model_dump())
+				return
+			if parsed.path == "/api/search":
+				request = SearchRequest.model_validate(body)
+				if not self.collector.start(request):
+					self._send_json({"error": "Ya hay una búsqueda en ejecución.", "status": self.collector.status()}, HTTPStatus.CONFLICT)
+					return
+				self._send_json(self.collector.status(), HTTPStatus.ACCEPTED)
+				return
 		except (ValidationError, ValueError, json.JSONDecodeError) as exc:
 			self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 			return
-
-		if not self.collector.start(request):
-			self._send_json(
-				{"error": "Ya hay una búsqueda de Computrabajo en ejecución.", "status": self.collector.status()},
-				HTTPStatus.CONFLICT,
-			)
-			return
-
-		self._send_json(self.collector.status(), HTTPStatus.ACCEPTED)
+		self.send_error(HTTPStatus.NOT_FOUND)
 
 	def log_message(self, format: str, *args: object) -> None:
 		return
