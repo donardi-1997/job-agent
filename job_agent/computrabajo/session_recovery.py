@@ -36,10 +36,10 @@ async def reset_computrabajo_site_data(profile_dir: Path | str = DEFAULT_PROFILE
         await browser.start()
         cdp = await browser.get_or_create_cdp_session(browser.agent_focus_target_id, focus=True)
         await cdp.cdp_client.send.Network.enable(session_id=cdp.session_id)
-        await cdp.cdp_client.send.Storage.enable(session_id=cdp.session_id)
 
-        # Browser cache itself contains no authentication credentials. Site data
-        # (cookies/local storage/etc.) is cleared only for Computrabajo origins.
+        # Storage.clearDataForOrigin is directly callable in the CDP client used
+        # by Browser Use 0.13.10. Its Storage client does not expose enable(), so
+        # calling Storage.enable here breaks recovery before any data is cleared.
         await cdp.cdp_client.send.Network.clearBrowserCache(session_id=cdp.session_id)
         for origin in COMPUTRABAJO_SITE_ORIGINS:
             await cdp.cdp_client.send.Storage.clearDataForOrigin(
