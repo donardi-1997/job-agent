@@ -3,7 +3,8 @@
 import sys
 
 from job_agent.async_runtime import run_async
-from job_agent.computrabajo.application import AssistedApplicationPreparer, PreparationStatus
+from job_agent.computrabajo.application import PreparationStatus
+from job_agent.computrabajo.cost_aware_application import CostAwareApplicationPreparer as AssistedApplicationPreparer
 from job_agent.computrabajo.batch import BatchApplyRequest, BatchApplyRunner, BatchApplyStatus
 from job_agent.computrabajo.collector import ComputrabajoCollector, SearchRequest, SearchRunStatus
 
