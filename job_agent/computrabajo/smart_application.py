@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from job_agent.answer_memory import normalize_question
 from job_agent.computrabajo.cost_aware_application import CostAwareApplicationPreparer
 from job_agent.computrabajo.deterministic_application import (
+    DeterministicApplicationResult,
     DeterministicApplicationRunner,
     ObservedField,
 )
-from job_agent.computrabajo.semantic_answers import classify_question, semantic_similarity
+from job_agent.computrabajo.semantic_answers import (
+    LocalSemanticAnswer,
+    classify_question,
+    semantic_similarity,
+)
 from job_agent.profile import UserProfile
 
 
@@ -32,14 +38,32 @@ class SmartDeterministicApplicationRunner(DeterministicApplicationRunner):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._current_job: dict[str, object] = {}
+        self._resolution_meta: dict[str, LocalSemanticAnswer] = {}
 
-    async def apply(self, *, job: dict[str, object], **kwargs: Any):
-        previous = self._current_job
+    async def apply(self, *, job: dict[str, object], **kwargs: Any) -> DeterministicApplicationResult:
+        previous_job = self._current_job
+        previous_meta = self._resolution_meta
         self._current_job = job
+        self._resolution_meta = {}
         try:
-            return await super().apply(job=job, **kwargs)
+            result = await super().apply(job=job, **kwargs)
+            questions = []
+            for question in result.questions:
+                meta = self._resolution_meta.get(normalize_question(question.question))
+                if meta is None or not question.answer:
+                    questions.append(question)
+                    continue
+                questions.append(
+                    replace(
+                        question,
+                        confidence=meta.confidence,
+                        note=f"{meta.reason} Fuente: {meta.source}; intención: {meta.intent}.",
+                    )
+                )
+            return replace(result, questions=tuple(questions))
         finally:
-            self._current_job = previous
+            self._current_job = previous_job
+            self._resolution_meta = previous_meta
 
     def _resolve_answer(
         self,
@@ -60,6 +84,14 @@ class SmartDeterministicApplicationRunner(DeterministicApplicationRunner):
                 match=match,
             )
             if adapted is not None:
+                resolution = LocalSemanticAnswer(
+                    answer=adapted,
+                    confidence=100,
+                    source="saved_draft",
+                    intent=match.intent,
+                    reason="Respuesta reutilizada del borrador de esta misma vacante.",
+                )
+                self._resolution_meta[normalize_question(field.question)] = resolution
                 return adapted
 
         resolution = self.answer_memory.resolve_context(
@@ -69,7 +101,10 @@ class SmartDeterministicApplicationRunner(DeterministicApplicationRunner):
             options=field.options,
             job=self._current_job,
         )
-        return resolution.answer if resolution else None
+        if resolution:
+            self._resolution_meta[normalize_question(field.question)] = resolution
+            return resolution.answer
+        return None
 
     def _saved_answer_semantic(
         self,
@@ -169,3 +204,13 @@ class SmartApplicationPreparer(CostAwareApplicationPreparer):
             self.answer_memory,
             self.pattern_store,
         )
+
+    def application_efficiency(self) -> dict[str, object]:
+        metrics = super().application_efficiency()
+        memory = self.answer_memory.stats()
+        return {
+            **metrics,
+            "semantic_zero_cost": True,
+            "semantic_answer_coverage_pct": memory["answer_coverage_pct"],
+            "semantic_answers": memory["answers"],
+        }
