@@ -19,7 +19,7 @@ from job_agent.storage import JobRecord, JobStore
 
 COMPUTRABAJO_URL = "https://co.computrabajo.com/"
 DEFAULT_PROFILE_DIR = Path("data/browser-profile")
-DEFAULT_BROWSER_MODEL = "bu-2-0"
+DEFAULT_BROWSER_MODEL = "bu-latest"
 
 
 class SearchRequest(BaseModel):
@@ -129,7 +129,7 @@ class ComputrabajoCollector:
 			try:
 				history = await agent.run(max_steps=60)
 			finally:
-				self.usage_store.record(
+				self.usage_store.record_safely(
 					"search",
 					llm.snapshot(),
 					metadata={"keyword": request.keyword, "location": request.location},
