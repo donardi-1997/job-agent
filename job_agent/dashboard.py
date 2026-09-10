@@ -10,6 +10,8 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import ValidationError
 
+from job_agent.ai_usage import AIUsageStore
+from job_agent.answer_memory import AnswerMemory
 from job_agent.computrabajo import (
 	AssistedApplicationPreparer,
 	BatchApplyRequest,
@@ -25,6 +27,8 @@ from job_agent.storage import JobStore
 STATIC_DIR = Path(__file__).with_name("dashboard_static")
 STORE = JobStore()
 PROFILE_STORE = ProfileStore(STORE.path)
+AI_USAGE_STORE = AIUsageStore(STORE.path)
+ANSWER_MEMORY = AnswerMemory(STORE.path)
 COLLECTOR = ComputrabajoCollector(store=STORE)
 PREPARER = AssistedApplicationPreparer(store=STORE)
 BATCH_RUNNER = BatchApplyRunner(store=STORE, collector=COLLECTOR, preparer=PREPARER)
@@ -38,6 +42,8 @@ JOB_ATTEMPTS_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/attempts$")
 class DashboardHandler(BaseHTTPRequestHandler):
 	store = STORE
 	profile_store = PROFILE_STORE
+	ai_usage_store = AI_USAGE_STORE
+	answer_memory = ANSWER_MEMORY
 	collector = COLLECTOR
 	preparer = PREPARER
 	batch_runner = BATCH_RUNNER
@@ -73,9 +79,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 	def do_GET(self) -> None:  # noqa: N802
 		parsed = urlparse(self.path)
-		static = {"/": ("index.html", "text/html; charset=utf-8"), "/app.css": ("app.css", "text/css; charset=utf-8"), "/application.css": ("application.css", "text/css; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8")}
+		static = {
+			"/": ("index.html", "text/html; charset=utf-8"),
+			"/app.css": ("app.css", "text/css; charset=utf-8"),
+			"/application.css": ("application.css", "text/css; charset=utf-8"),
+			"/app.js": ("app.js", "text/javascript; charset=utf-8"),
+			"/costs.js": ("costs.js", "text/javascript; charset=utf-8"),
+		}
 		if parsed.path in static: self._send_static(*static[parsed.path]); return
 		if parsed.path == "/api/stats": self._send_json(self.store.stats()); return
+		if parsed.path == "/api/ai/usage":
+			payload = self.ai_usage_store.summary(); payload["answer_memory"] = self.answer_memory.stats(); self._send_json(payload); return
 		if parsed.path == "/api/profile": self._send_json(self.profile_store.get().model_dump()); return
 		if parsed.path == "/api/search/status": self._send_json(self.collector.status()); return
 		if parsed.path == "/api/prepare/status": self._send_json(self.preparer.status()); return
@@ -127,6 +141,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 			match = JOB_DRAFT_RE.match(parsed.path)
 			if match:
 				job_id = int(match.group("job_id")); draft = ApplicationDraftOutput.model_validate(body)
+				for item in draft.questions:
+					if item.suggested_answer and not item.requires_user_input:
+						self.answer_memory.remember(item.question, item.suggested_answer, source="manual", confidence=100)
 				self._send_json(self.store.save_application_draft(job_id, draft.model_dump())); return
 			match = JOB_PREPARE_RE.match(parsed.path)
 			if match:
