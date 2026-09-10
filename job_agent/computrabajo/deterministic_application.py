@@ -485,8 +485,8 @@ class DeterministicApplicationRunner:
             questions=tuple(questions.values()),
             observed_fields=tuple(observed.values()),
             steps=steps,
-			mode=str(kwargs.pop("mode", self._mode)),
-			test_mode=bool(kwargs.pop("test_mode", self._mode == "test")),
+            mode=str(kwargs.pop("mode", self._mode)),
+            test_mode=bool(kwargs.pop("test_mode", self._mode == "test")),
             **kwargs,
         )
 
@@ -612,6 +612,7 @@ class DeterministicApplicationRunner:
             "candidatura enviada",
             "aplicacion enviada",
             "te has postulado correctamente",
+            "te aplicaste correctamente",
             "postulacion exitosa",
         )
         if any(normalize_question(marker) in text for marker in already):
