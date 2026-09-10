@@ -69,6 +69,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 		path = STATIC_DIR / filename
 		if not path.exists(): self.send_error(HTTPStatus.NOT_FOUND); return
 		body = path.read_bytes()
+		if filename == "app.js":
+			cost_widget = STATIC_DIR / "costs.js"
+			if cost_widget.exists():
+				body += b"\n\n" + cost_widget.read_bytes()
 		self.send_response(HTTPStatus.OK)
 		self.send_header("Content-Type", content_type)
 		self.send_header("Content-Length", str(len(body)))
