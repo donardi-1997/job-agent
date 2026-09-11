@@ -54,6 +54,13 @@ jobs:
       - name: Compile Job Agent
         run: uv run --no-sync python -m compileall -q job_agent run_job_agent.py
 
+      - name: Validate dashboard JavaScript
+        shell: bash
+        run: |
+          for file in job_agent/dashboard_static/*.js; do
+            node --check "$file"
+          done
+
       - name: Verify zero-cost provider guard
         run: uv run --no-sync pytest tests/job_agent/test_ai_usage.py::test_zero_cost_mode_blocks_before_provider_call -q
 
