@@ -1,0 +1,34 @@
+name: Temporary SearchJob formatter
+
+on:
+  push:
+    branches:
+      - improve/computrabajo-smoke-test
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Format SearchJob files
+        run: |
+          uvx ruff format \
+            job_agent/computrabajo/smoke_test.py \
+            tests/job_agent/test_computrabajo_smoke_test.py \
+            job_agent/semantic_answers.py \
+            tests/job_agent/test_semantic_form_resolution.py
+      - name: Package formatted files
+        run: |
+          mkdir -p formatted/job_agent/computrabajo formatted/job_agent formatted/tests/job_agent
+          cp job_agent/computrabajo/smoke_test.py formatted/job_agent/computrabajo/
+          cp job_agent/semantic_answers.py formatted/job_agent/
+          cp tests/job_agent/test_computrabajo_smoke_test.py formatted/tests/job_agent/
+          cp tests/job_agent/test_semantic_form_resolution.py formatted/tests/job_agent/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: searchjob-formatted-files
+          path: formatted/
