@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from job_agent.answer_memory import AnswerMemory, normalize_question
 from job_agent.async_runtime import run_async
@@ -28,7 +28,7 @@ def _field_key(question: str, field_type: str) -> tuple[str, str]:
     return normalize_question(question), field_type.strip().casefold()
 
 
-def build_smoke_report(job: dict[str, object], result: DeterministicApplicationResult) -> dict[str, object]:
+def build_smoke_report(job: dict[str, object], result: DeterministicApplicationResult) -> dict[str, Any]:
     """Build a diagnostic report without persisting candidate answers or field values."""
     questions = {
         _field_key(item.question, item.field_type): item
@@ -127,7 +127,7 @@ def run_smoke_test(
     profile_dir: Path | str = DEFAULT_PROFILE_DIR,
     report_dir: Path | str = DEFAULT_SMOKE_REPORT_DIR,
     deterministic_runner: DeterministicSmokeRunner | None = None,
-) -> tuple[dict[str, object], Path]:
+) -> tuple[dict[str, Any], Path]:
     """Inspect and fill one real Computrabajo application in TEST mode without submitting it."""
     store = JobStore(db_path)
     job = store.get_job(job_id)
