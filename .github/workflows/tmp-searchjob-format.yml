@@ -6,13 +6,16 @@ on:
       - improve/computrabajo-smoke-test
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   format:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: improve/computrabajo-smoke-test
       - uses: astral-sh/setup-uv@v6
       - name: Format SearchJob files
         run: |
@@ -21,14 +24,22 @@ jobs:
             tests/job_agent/test_computrabajo_smoke_test.py \
             job_agent/semantic_answers.py \
             tests/job_agent/test_semantic_form_resolution.py
-      - name: Package formatted files
+      - name: Commit formatter output
         run: |
-          mkdir -p formatted/job_agent/computrabajo formatted/job_agent formatted/tests/job_agent
-          cp job_agent/computrabajo/smoke_test.py formatted/job_agent/computrabajo/
-          cp job_agent/semantic_answers.py formatted/job_agent/
-          cp tests/job_agent/test_computrabajo_smoke_test.py formatted/tests/job_agent/
-          cp tests/job_agent/test_semantic_form_resolution.py formatted/tests/job_agent/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: searchjob-formatted-files
-          path: formatted/
+          if git diff --quiet -- \
+            job_agent/computrabajo/smoke_test.py \
+            tests/job_agent/test_computrabajo_smoke_test.py \
+            job_agent/semantic_answers.py \
+            tests/job_agent/test_semantic_form_resolution.py; then
+            echo "No formatting changes required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            job_agent/computrabajo/smoke_test.py \
+            tests/job_agent/test_computrabajo_smoke_test.py \
+            job_agent/semantic_answers.py \
+            tests/job_agent/test_semantic_form_resolution.py
+          git commit -m "style(job-agent): apply Ruff formatting"
+          git push origin HEAD:improve/computrabajo-smoke-test
