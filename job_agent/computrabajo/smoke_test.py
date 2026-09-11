@@ -28,6 +28,25 @@ def _field_key(question: str, field_type: str) -> tuple[str, str]:
     return normalize_question(question), field_type.strip().casefold()
 
 
+def select_smoke_job_id(*, db_path: Path | str = DEFAULT_DB_PATH) -> int:
+    """Pick the best safe, application-ready Computrabajo vacancy from local storage."""
+    store = JobStore(db_path)
+    profile = ProfileStore(store.path).get()
+    candidates = store.list_jobs(limit=100, min_score=profile.prepare_application_score)
+    for job in candidates:
+        if str(job.get("source") or "").strip().casefold() != "computrabajo":
+            continue
+        if str(job.get("status") or "").strip().casefold() in {"applied", "ignored"}:
+            continue
+        job_id = job.get("id")
+        if isinstance(job_id, int) and job_id > 0:
+            return job_id
+    raise ValueError(
+        "No hay una vacante de Computrabajo elegible para smoke test con score >= "
+        f"{profile.prepare_application_score}. Ejecuta una búsqueda o indica un JOB_ID explícito."
+    )
+
+
 def build_smoke_report(job: dict[str, object], result: DeterministicApplicationResult) -> dict[str, Any]:
     """Build a diagnostic report without persisting candidate answers or field values."""
     questions = {
