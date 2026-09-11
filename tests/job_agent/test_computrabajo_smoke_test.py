@@ -29,7 +29,9 @@ def _seed_job(path: Path) -> tuple[JobStore, int]:
             )
         ]
     )
-    return store, int(store.list_jobs()[0]["id"])
+    job_id = store.list_jobs()[0]["id"]
+    assert isinstance(job_id, int)
+    return store, job_id
 
 
 def test_build_smoke_report_never_exposes_answers_or_current_values() -> None:
@@ -157,7 +159,8 @@ def test_run_smoke_test_rejects_non_computrabajo_jobs(tmp_path: Path) -> None:
             )
         ]
     )
-    job_id = int(store.list_jobs()[0]["id"])
+    job_id = store.list_jobs()[0]["id"]
+    assert isinstance(job_id, int)
 
     try:
         run_smoke_test(job_id, db_path=store.path, report_dir=tmp_path / "reports")
