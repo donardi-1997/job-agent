@@ -7,7 +7,7 @@ from job_agent.telegram_notifications import TelegramApplicationNotifier
 
 
 class NotifyingApplicationPreparer(CostAwareApplicationPreparer):
-	"""Cost-aware Computrabajo preparer with best-effort success notifications."""
+	'''Cost-aware Computrabajo preparer with best-effort success notifications.'''
 
 	def __init__(self, *args: object, **kwargs: object) -> None:
 		super().__init__(*args, **kwargs)
