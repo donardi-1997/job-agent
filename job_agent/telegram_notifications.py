@@ -20,12 +20,12 @@ class TelegramDelivery:
 
 
 class TelegramApplicationNotifier:
-	"""Send best-effort Telegram alerts for confirmed job applications.
+	'''Send best-effort Telegram alerts for confirmed job applications.
 
 	The bot token and chat ID are read from the environment only at send time and
 	are never persisted. Delivery state is stored locally so retries do not create
 	duplicate notifications for the same Computrabajo vacancy.
-	"""
+	'''
 
 	def __init__(self, db_path: Path | str = DEFAULT_DB_PATH, *, timeout_seconds: float = 5.0) -> None:
 		self.path = Path(db_path)
