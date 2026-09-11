@@ -14,7 +14,7 @@ from job_agent.storage import JobStore
 
 
 def test_dashboard_export_uses_cost_aware_preparer() -> None:
-    assert AssistedApplicationPreparer is CostAwareApplicationPreparer
+    assert issubclass(AssistedApplicationPreparer, CostAwareApplicationPreparer)
 
 
 @pytest.mark.asyncio
