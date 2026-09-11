@@ -16,10 +16,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--smoke-test-job",
-        type=int,
         default=None,
-        metavar="JOB_ID",
-        help="Run one safe Computrabajo application smoke test for JOB_ID and exit without submitting.",
+        metavar="JOB_ID|auto",
+        help="Run one safe Computrabajo application smoke test for JOB_ID, or auto-select the best eligible job.",
     )
     parser.add_argument(
         "--smoke-report-dir",
@@ -52,10 +51,22 @@ def main() -> None:
         print(f"Job Agent cleaned {removed} invalid Computrabajo error-page record(s).")
 
     if args.smoke_test_job is not None:
-        from job_agent.computrabajo.smoke_test import run_smoke_test
+        from job_agent.computrabajo.smoke_test import run_smoke_test, select_smoke_job_id
+
+        raw_target = str(args.smoke_test_job).strip().casefold()
+        if raw_target == "auto":
+            job_id = select_smoke_job_id()
+            print(f"Smoke target auto-selected: job {job_id}.")
+        else:
+            try:
+                job_id = int(raw_target)
+            except ValueError:
+                parser.error("--smoke-test-job must be a positive JOB_ID or 'auto'.")
+            if job_id <= 0:
+                parser.error("--smoke-test-job must be a positive JOB_ID or 'auto'.")
 
         report, output_path = run_smoke_test(
-            args.smoke_test_job,
+            job_id,
             report_dir=args.smoke_report_dir,
         )
         coverage = report["coverage"]
