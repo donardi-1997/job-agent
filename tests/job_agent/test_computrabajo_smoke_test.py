@@ -8,7 +8,7 @@ from job_agent.computrabajo.deterministic_application import (
     DeterministicApplicationResult,
     ObservedField,
 )
-from job_agent.computrabajo.smoke_test import build_smoke_report, run_smoke_test
+from job_agent.computrabajo.smoke_test import build_smoke_report, run_smoke_test, select_smoke_job_id
 from job_agent.storage import JobRecord, JobStore
 
 
@@ -32,6 +32,67 @@ def _seed_job(path: Path) -> tuple[JobStore, int]:
     job_id = store.list_jobs()[0]["id"]
     assert isinstance(job_id, int)
     return store, job_id
+
+
+def test_select_smoke_job_id_picks_best_eligible_computrabajo_job(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.upsert_jobs(
+        [
+            JobRecord(
+                id=None,
+                source="computrabajo",
+                external_id="already-applied",
+                title="Senior Backend Developer",
+                company="Applied SAS",
+                location="Colombia",
+                url="https://co.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-senior-AAA",
+                score=99,
+                band="prepare",
+                status="applied",
+            ),
+            JobRecord(
+                id=None,
+                source="linkedin",
+                external_id="wrong-source",
+                title="Backend Developer",
+                company="Other SAS",
+                location="Colombia",
+                url="https://www.linkedin.com/jobs/view/123",
+                score=98,
+                band="prepare",
+            ),
+            JobRecord(
+                id=None,
+                source="computrabajo",
+                external_id="eligible-target",
+                title="Python Backend Developer",
+                company="Target SAS",
+                location="Colombia",
+                url="https://co.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-python-BBB",
+                score=92,
+                band="prepare",
+                status="saved",
+            ),
+            JobRecord(
+                id=None,
+                source="computrabajo",
+                external_id="below-prepare-threshold",
+                title="Junior Developer",
+                company="Low SAS",
+                location="Colombia",
+                url="https://co.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-junior-CCC",
+                score=80,
+                band="review",
+            ),
+        ]
+    )
+
+    selected_id = select_smoke_job_id(db_path=store.path)
+    selected = store.get_job(selected_id)
+
+    assert selected is not None
+    assert selected["external_id"] == "eligible-target"
+    assert selected["score"] == 92
 
 
 def test_build_smoke_report_never_exposes_answers_or_current_values() -> None:
