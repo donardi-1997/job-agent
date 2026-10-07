@@ -216,4 +216,4 @@ Discovery, individual applications and batch auto-apply share the same persisten
 
 ## Development branch
 
-All current Job Agent work lives on `develop/computrabajo-agent`. `main` remains untouched until the local deterministic flow is tested sufficiently. Upstream-derived Browser Use code remains isolated from application-specific code where practical so future upstream updates remain manageable.
+All current Job Agent work lives on `develop/computrabajo-agent`. Pull requests targeting that branch use the dedicated `Job Agent CI` workflow instead of the inherited Browser Use lint/test/evaluation matrix. `main` remains untouched until the local deterministic flow is tested sufficiently. Upstream-derived Browser Use code remains isolated from application-specific code where practical so future upstream updates remain manageable.
