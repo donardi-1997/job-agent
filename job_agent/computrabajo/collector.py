@@ -413,5 +413,6 @@ Return only actual vacancies on co.computrabajo.com.
 				)
 			)
 		if records:
-			self.store.upsert_jobs(records)
+			self.store.update_job_scores(records)
+			self.store.refresh_application_queue()
 		return len(records)
