@@ -56,6 +56,11 @@ Do not use that flag when the requirement is strict US$0 API spend.
 16. Learn high-confidence answers from confirmed applications and explicit manual corrections.
 17. Keep historical AI metering for runs where paid mode was explicitly enabled.
 18. Refuse CAPTCHA/2FA/access-control bypasses.
+19. Reuse recent search results instead of reopening the browser for identical queries inside the configured refresh window.
+20. Maintain an application queue (`scored → shortlisted → ready → applying → applied/blocked/needs_user`).
+21. Use weighted Scoring V2 across role, verified skills, experience fit, cloud/certifications, location, professional context and freshness.
+22. Canonicalize recurring low-risk application questions (salary, city, English, availability, experience, work mode) so paraphrases share one local answer.
+23. Enforce persistent daily/monthly AI spend caps in addition to the default zero-cost guard.
 
 ## Local setup
 
@@ -134,7 +139,7 @@ If CAPTCHA, 2FA, bot detection or another access-control challenge is encountere
 
 AI metering is retained for historical data and for the explicit `--allow-paid-ai` mode. `MeteredChatBrowserUse` records Browser Use token metadata when a paid invocation is intentionally permitted.
 
-In normal zero-cost mode, the same class contains a hard preflight guard. It raises before contacting the provider, so its expected new paid-call count is **0**.
+In normal zero-cost mode, the same class contains a hard preflight guard. It raises before contacting the provider, so its expected new paid-call count is **0**. If paid mode is explicitly enabled, persistent preflight limits default to **US$0.25/day** and **US$5/month** (configurable by environment), on top of each batch's own call/cost budget.
 
 The dashboard can still show previous AI usage. Historical spend does not mean the current zero-cost process is generating new spend.
 
@@ -188,6 +193,8 @@ Discovery, individual applications and batch auto-apply share the same persisten
 - `GET /api/jobs/{id}/attempts` — returns application-attempt history.
 - `GET /api/prepare/status` — returns individual-application status.
 - `GET /api/stats` — returns dashboard KPIs.
+- `GET /api/queue` — returns the local application queue ordered by priority.
+- `GET /api/efficiency` — returns search/application efficiency, answer coverage, queue state and AI budget telemetry.
 - `GET /api/profile` — loads the personal candidate profile.
 - `POST /api/profile` — validates and saves the personal candidate profile.
 - `GET /api/cv` — loads CV status plus all locally stored variants.
