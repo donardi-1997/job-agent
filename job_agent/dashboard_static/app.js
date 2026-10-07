@@ -55,6 +55,21 @@ function renderStats(stats) {
 	$('#highMatchMetric').textContent = stats.high_match ?? 0;
 	$('#appliedMetric').textContent = stats.applied ?? 0;
 	$('#avgScoreMetric').textContent = stats.avg_score ?? 0;
+	$('#queueReadyMetric').textContent = stats.queue_ready ?? 0;
+	$('#queueNeedsUserMetric').textContent = stats.queue_needs_user ?? 0;
+}
+
+function renderEfficiency(efficiency) {
+	const coverage = Number(efficiency?.answers?.answer_coverage_pct || 0);
+	const todayCost = Number(efficiency?.ai?.today?.cost_usd || 0);
+	const budget = efficiency?.ai?.budget || {};
+	$('#answerCoverageMetric').textContent = `${coverage.toFixed(0)}%`;
+	$('#aiTodayMetric').textContent = budget.zero_cost_mode
+		? '$0 · ZERO'
+		: `${todayCost.toFixed(3)}`;
+	$('#aiTodayMetric').title = budget.zero_cost_mode
+		? 'Modo ZERO COST activo'
+		: `Restante hoy: ${Number(budget.daily_remaining_usd || 0).toFixed(3)} · mes: ${Number(budget.monthly_remaining_usd || 0).toFixed(2)}`;
 }
 
 function renderJobs(jobs) {
@@ -246,6 +261,9 @@ async function startBatch(event) {
 		min_score: Number($('#batchScoreInput').value),
 		max_applications: Number($('#batchMaxInput').value),
 		daily_limit: Number($('#batchDailyInput').value),
+		refresh_after_hours: Number($('#batchRefreshHours').value || 6),
+		max_ai_calls: 0,
+		max_ai_cost_usd: 0,
 	};
 	try {
 		const status = await fetchJson('/api/batch', {
@@ -351,7 +369,10 @@ async function loadDraft(jobId) {
 
 async function openJob(jobId) {
 	try {
-		const job = await fetchJson(`/api/jobs/${jobId}`);
+		const [job, cv] = await Promise.all([
+			fetchJson(`/api/jobs/${jobId}`),
+			fetchJson(`/api/jobs/${jobId}/cv`).catch(() => ({ configured: false })),
+		]);
 		activeJobId = jobId;
 		$('#drawerTitle').textContent = job.title;
 		$('#drawerCompany').textContent = [job.company, job.location].filter(Boolean).join(' · ');
@@ -360,6 +381,12 @@ async function openJob(jobId) {
 		$('#matchedSkills').innerHTML = chips(job.matched_skills, 'Sin coincidencias directas.');
 		$('#missingSkills').innerHTML = chips(job.missing_skills, 'Sin brechas configuradas.');
 		$('#matchReasons').innerHTML = (job.match_reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join('') || '<li>Sin razones adicionales.</li>';
+		const selectedCv = $('#selectedCv');
+		if (cv?.configured && cv.variant) {
+			selectedCv.innerHTML = `<strong>${escapeHtml(cv.variant.label || cv.variant.variant_key)}</strong><span>${escapeHtml(cv.variant.filename || '')} · elegido automáticamente para esta vacante.</span>`;
+		} else {
+			selectedCv.innerHTML = '<strong>Sin variante cargada</strong><span>Carga tus CV en Mi perfil antes de una postulación real.</span>';
+		}
 		$('#drawerDescription').textContent = job.description || 'Sin descripción almacenada.';
 		$('#drawerOpenLink').href = job.url;
 		$('#jobDrawer').classList.add('open');
@@ -439,12 +466,14 @@ async function loadDashboard() {
 	const query = new URLSearchParams({ min_score: String(Number($('#scoreFilter').value || 0)) });
 	if ($('#statusFilter').value) query.set('status', $('#statusFilter').value);
 	try {
-		const [stats, jobs, state] = await Promise.all([
+		const [stats, jobs, state, efficiency] = await Promise.all([
 			fetchJson('/api/stats'),
 			fetchJson(`/api/jobs?${query}`),
 			fetchJson('/api/search/status'),
+			fetchJson('/api/efficiency'),
 		]);
 		renderStats(stats);
+		renderEfficiency(efficiency);
 		renderJobs(jobs);
 		renderSearchStatus(state);
 	} catch (error) {
