@@ -271,10 +271,14 @@ class DeterministicApplicationRunner:
         saved_draft: dict[str, object],
         max_steps: int = 12,
         mode: str = "test",
+        resume_path: Path | str | None = None,
     ) -> DeterministicApplicationResult:
         if mode not in {"test", "real"}:
             raise ValueError("mode must be 'test' or 'real'")
         self._mode = mode
+        resume_file = Path(resume_path).resolve() if resume_path else None
+        if resume_file is not None and not resume_file.exists():
+            resume_file = None
         job_url = str(job.get("url") or "")
         if not is_safe_application_url(job_url):
             return DeterministicApplicationResult(fallback_reason="URL de vacante fuera de la allowlist de Computrabajo.")
@@ -363,9 +367,30 @@ class DeterministicApplicationRunner:
                 unresolved_required: list[ObservedField] = []
                 answers_to_fill: list[tuple[ObservedField, str]] = []
                 for field in fields:
-                    if field.field_type in {"hidden", "submit", "button", "file", "password"}:
-                        if field.field_type == "file" and field.required:
+                    if field.field_type == "file":
+                        if resume_file is not None and await self._fill_file_input(cdp, field, resume_file):
+                            questions[(normalize_question(field.question), field.field_type)] = DeterministicApplicationQuestion(
+                                question=field.question,
+                                field_type=field.field_type,
+                                options=field.options,
+                                answer=resume_file.name,
+                                confidence=100,
+                                requires_user_input=False,
+                                note="CV seleccionado automáticamente para esta vacante y adjuntado desde almacenamiento local.",
+                            )
+                        elif field.required:
                             unresolved_required.append(field)
+                            questions[(normalize_question(field.question), field.field_type)] = DeterministicApplicationQuestion(
+                                question=field.question,
+                                field_type=field.field_type,
+                                options=field.options,
+                                answer="",
+                                confidence=0,
+                                requires_user_input=True,
+                                note="La vacante exige un archivo de CV y no se pudo adjuntar una variante local.",
+                            )
+                        continue
+                    if field.field_type in {"hidden", "submit", "button", "password"}:
                         continue
                     if field.current_value and field.field_type not in {"checkbox", "radio"}:
                         question = DeterministicApplicationQuestion(
@@ -676,6 +701,38 @@ class DeterministicApplicationRunner:
         )
         return _runtime_value(result)
 
+    async def _fill_file_input(self, cdp: Any, field: ObservedField, file_path: Path) -> bool:
+        """Attach a locally selected CV to an HTML file input through CDP."""
+        try:
+            evaluation = await cdp.cdp_client.send.Runtime.evaluate(
+                params={
+                    "expression": f"document.querySelector({json.dumps(field.selector)})",
+                    "returnByValue": False,
+                },
+                session_id=cdp.session_id,
+            )
+            payload = evaluation.get("result") if isinstance(evaluation, dict) else None
+            object_id = payload.get("objectId") if isinstance(payload, dict) else None
+            if not object_id:
+                return False
+            await cdp.cdp_client.send.DOM.setFileInputFiles(
+                params={"files": [str(file_path)], "objectId": object_id},
+                session_id=cdp.session_id,
+            )
+            await self._evaluate(
+                cdp,
+                f"""(() => {{
+                  const el = document.querySelector({json.dumps(field.selector)});
+                  if (!el) return false;
+                  el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                  el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                  return true;
+                }})()""",
+            )
+            return True
+        except Exception:
+            return False
+
     async def _fill_fields(self, cdp: Any, values: list[tuple[ObservedField, str]]) -> bool:
         payload = [
             {"selector": field.selector, "type": field.field_type, "answer": answer}
@@ -785,8 +842,8 @@ class DeterministicApplicationRunner:
   const fields = [];
   const seenRadio = new Set();
   for (const el of document.querySelectorAll('input, textarea, select')) {
-    if (!visible(el) || el.disabled) continue;
     const rawType = el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea' : (el.type || 'text').toLowerCase();
+    if ((!visible(el) && rawType !== 'file') || el.disabled) continue;
     if (rawType === 'radio') {
       const group = el.name || selectorFor(el);
       if (seenRadio.has(group)) continue;

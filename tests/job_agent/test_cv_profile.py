@@ -60,3 +60,69 @@ def test_cv_import_rejects_unsupported_and_too_short_files(tmp_path: Path) -> No
 
 	with pytest.raises(ValueError, match='suficiente texto'):
 		service.import_bytes('cv.txt', b'too short')
+
+
+
+def test_cv_variants_are_stored_and_selected_for_each_job(tmp_path: Path) -> None:
+	db_path = tmp_path / 'job-agent.db'
+	service = CVProfileService(db_path, tmp_path / 'cv')
+	service.import_bytes(
+		'backend.txt',
+		(
+			b'Backend Developer Python Developer FastAPI REST APIs PostgreSQL Docker. '
+			b'Built backend services, integrations, authentication and SQL APIs with Python. '
+		) * 3,
+		variant_name='Backend / Python',
+		activate=True,
+	)
+	service.import_bytes(
+		'aws.txt',
+		(
+			b'AWS Developer Cloud Engineer Amazon Web Services Lambda API Gateway DynamoDB S3 '
+			b'Cognito Bedrock RAG CI/CD GitHub Actions serverless cloud architecture. '
+		) * 3,
+		variant_name='AWS / Cloud',
+		activate=False,
+	)
+
+	variants = service.list_variants()
+	assert {item['label'] for item in variants} == {'Backend / Python', 'AWS / Cloud'}
+	assert next(item for item in variants if item['is_default'])['label'] == 'Backend / Python'
+
+	selected = service.select_for_job(
+		{
+			'title': 'AWS Cloud Engineer',
+			'description': 'Serverless AWS role using Lambda, API Gateway, S3, DynamoDB and Bedrock.',
+			'company': 'Example',
+			'location': 'Colombia',
+		}
+	)
+	assert selected is not None
+	assert selected['label'] == 'AWS / Cloud'
+	assert service.path_for_job({'title': 'AWS Developer', 'description': 'Lambda S3 API Gateway'}) is not None
+
+
+def test_activate_variant_updates_default_profile_and_legacy_current_file(tmp_path: Path) -> None:
+	db_path = tmp_path / 'job-agent.db'
+	service = CVProfileService(db_path, tmp_path / 'cv')
+	backend = service.import_bytes(
+		'backend.txt',
+		(b'Backend Developer Python FastAPI REST APIs PostgreSQL Docker cloud integration. ') * 4,
+		variant_name='Backend / Python',
+		activate=True,
+	)
+	ai = service.import_bytes(
+		'ai.txt',
+		(b'AI Engineer Python AWS Bedrock RAG LLM FastAPI React artificial intelligence applications. ') * 4,
+		variant_name='Full Stack / AI',
+		activate=False,
+	)
+
+	service.activate_variant(ai.variant_key)
+	status = service.status()
+	profile = ProfileStore(db_path).get()
+
+	assert status['default_variant'] == ai.variant_key
+	assert any(item['variant_key'] == backend.variant_key for item in status['variants'])
+	assert 'AI Engineer' in profile.target_roles
+	assert (tmp_path / 'cv' / 'current.txt').exists()

@@ -39,7 +39,9 @@ Do not use that flag when the requirement is strict US$0 API spend.
 1. Run the dashboard locally on `127.0.0.1`.
 2. Configure one editable personal candidate profile directly from the dashboard.
 3. Persist roles, skills, locations, experience, salary, availability, language level and frequent answers in local SQLite.
-4. Discover Computrabajo vacancies through the local browser/CDP path.
+4. Store multiple local CV variants (for example Backend / Python, AWS / Cloud and Full Stack / AI), keep one as the default, and select the best match per vacancy.
+5. Attach the selected local CV automatically when a supported Computrabajo application form requires a file upload.
+6. Discover Computrabajo vacancies through the local browser/CDP path.
 5. Extract, deduplicate and score vacancies against the local profile.
 6. Review each vacancy with strengths, gaps, score reasons and description.
 7. Save or discard vacancies without losing that decision on later searches.
@@ -188,6 +190,10 @@ Discovery, individual applications and batch auto-apply share the same persisten
 - `GET /api/stats` — returns dashboard KPIs.
 - `GET /api/profile` — loads the personal candidate profile.
 - `POST /api/profile` — validates and saves the personal candidate profile.
+- `GET /api/cv` — loads CV status plus all locally stored variants.
+- `POST /api/cv` — imports a PDF/DOCX/TXT CV variant; accepts `variant_name` and `activate`.
+- `POST /api/cv/select` — makes one stored CV variant the default profile source.
+- `GET /api/jobs/{id}/cv` — previews which CV variant will be selected for a vacancy.
 
 ## Safety and cost invariants
 
@@ -210,4 +216,4 @@ Discovery, individual applications and batch auto-apply share the same persisten
 
 ## Development branch
 
-All current Job Agent work lives on `develop/computrabajo-agent`. `main` remains untouched until the local deterministic flow is tested sufficiently. Upstream-derived Browser Use code remains isolated from application-specific code where practical so future upstream updates remain manageable.
+All current Job Agent work lives on `develop/computrabajo-agent`. Pull requests targeting that branch use the dedicated `Job Agent CI` workflow instead of the inherited Browser Use lint/test/evaluation matrix. `main` remains untouched until the local deterministic flow is tested sufficiently. Upstream-derived Browser Use code remains isolated from application-specific code where practical so future upstream updates remain manageable.
