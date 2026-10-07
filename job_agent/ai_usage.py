@@ -18,6 +18,17 @@ from job_agent.storage import DEFAULT_DB_PATH
 logger = logging.getLogger(__name__)
 
 _FALSE_VALUES = {"0", "false", "no", "off"}
+DEFAULT_DAILY_AI_BUDGET_USD = 0.25
+DEFAULT_MONTHLY_AI_BUDGET_USD = 5.00
+DEFAULT_AI_CALL_RESERVE_USD = 0.02
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return default
 
 
 def _zero_cost_mode() -> bool:
@@ -121,6 +132,7 @@ class MeteredChatBrowserUse(ChatBrowserUse):
         self._requested_model = str(requested_model) if requested_model else ""
         self._on_usage = on_usage
         self._usage_budget = usage_budget
+        self._budget_db_path = Path(kwargs.pop("budget_db_path", DEFAULT_DB_PATH))
         super().__init__(*args, **kwargs)
         if not self._requested_model:
             self._requested_model = str(self.model)
@@ -159,6 +171,48 @@ class MeteredChatBrowserUse(ChatBrowserUse):
             pricing_known=pricing is not None,
         )
 
+    def _persistent_spend(self) -> tuple[float, float]:
+        if not self._budget_db_path.exists():
+            return 0.0, 0.0
+        try:
+            with sqlite3.connect(self._budget_db_path) as connection:
+                exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_usage_events'"
+                ).fetchone()
+                if not exists:
+                    return 0.0, 0.0
+                today = connection.execute(
+                    """
+                    SELECT COALESCE(SUM(estimated_cost_usd), 0)
+                    FROM ai_usage_events
+                    WHERE date(created_at, 'localtime') = date('now', 'localtime')
+                    """
+                ).fetchone()
+                month = connection.execute(
+                    """
+                    SELECT COALESCE(SUM(estimated_cost_usd), 0)
+                    FROM ai_usage_events
+                    WHERE strftime('%Y-%m', created_at, 'localtime') = strftime('%Y-%m', 'now', 'localtime')
+                    """
+                ).fetchone()
+            return float(today[0] if today else 0), float(month[0] if month else 0)
+        except sqlite3.Error:
+            raise AIUsageBudgetExceeded("No se pudo verificar el presupuesto global de IA; llamada pagada bloqueada.")
+
+    def _enforce_persistent_budget(self) -> None:
+        daily_limit = _float_env("JOB_AGENT_DAILY_AI_BUDGET_USD", DEFAULT_DAILY_AI_BUDGET_USD)
+        monthly_limit = _float_env("JOB_AGENT_MONTHLY_AI_BUDGET_USD", DEFAULT_MONTHLY_AI_BUDGET_USD)
+        reserve = _float_env("JOB_AGENT_AI_CALL_RESERVE_USD", DEFAULT_AI_CALL_RESERVE_USD)
+        today, month = self._persistent_spend()
+        if daily_limit <= 0 or today + reserve > daily_limit:
+            raise AIUsageBudgetExceeded(
+                f"Presupuesto diario global de IA agotado/protegido: US${today:.4f}/US${daily_limit:.2f}."
+            )
+        if monthly_limit <= 0 or month + reserve > monthly_limit:
+            raise AIUsageBudgetExceeded(
+                f"Presupuesto mensual global de IA agotado/protegido: US${month:.4f}/US${monthly_limit:.2f}."
+            )
+
     async def ainvoke(self, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
         if _zero_cost_mode():
             raise AIUsageBudgetExceeded(
@@ -167,6 +221,7 @@ class MeteredChatBrowserUse(ChatBrowserUse):
 
         if self._usage_budget is not None:
             self._usage_budget.before_call()
+        self._enforce_persistent_budget()
 
         completion = await super().ainvoke(*args, **kwargs)
         usage = completion.usage
@@ -357,10 +412,21 @@ class AIUsageStore:
                 item["metadata"] = {}
             recent.append(item)
 
+        today_period = period(today)
+        month_period = period(month)
+        daily_limit = _float_env("JOB_AGENT_DAILY_AI_BUDGET_USD", DEFAULT_DAILY_AI_BUDGET_USD)
+        monthly_limit = _float_env("JOB_AGENT_MONTHLY_AI_BUDGET_USD", DEFAULT_MONTHLY_AI_BUDGET_USD)
         return {
-            "today": period(today),
-            "month": period(month),
+            "today": today_period,
+            "month": month_period,
             "all_time": period(all_time),
+            "budget": {
+                "zero_cost_mode": _zero_cost_mode(),
+                "daily_limit_usd": daily_limit,
+                "monthly_limit_usd": monthly_limit,
+                "daily_remaining_usd": round(max(0.0, daily_limit - float(today_period["cost_usd"])), 6),
+                "monthly_remaining_usd": round(max(0.0, monthly_limit - float(month_period["cost_usd"])), 6),
+            },
             "recent": recent,
             "cost_is_estimate": True,
             "note": "Each Browser Use LLM response is persisted immediately; USD is estimated from returned token usage and the effective model pricing table.",
