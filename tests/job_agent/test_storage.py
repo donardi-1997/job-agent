@@ -141,3 +141,63 @@ def test_reopen_reconciles_existing_real_submission_evidence(tmp_path: Path) -> 
 	assert reopened.get_job(job_id)["status"] == "applied"
 	attempt = reopened.list_application_attempts(job_id)[0]
 	assert attempt["submitted"] is True
+
+
+
+def test_job_seen_metadata_and_queue_are_updated_without_duplicate(tmp_path: Path) -> None:
+	store = JobStore(tmp_path / "jobs.db")
+	job_id = _seed_job(store, "seen-twice")
+	first = store.get_job(job_id)
+	assert first is not None
+	assert first["times_seen"] == 1
+	assert first["first_seen_at"]
+	assert first["last_seen_at"]
+
+	store.upsert_jobs([
+		JobRecord(
+			id=None,
+			source="computrabajo",
+			external_id="seen-twice",
+			title="Python Developer",
+			company="Example SAS",
+			location="Bogotá",
+			url="https://co.computrabajo.com/seen-twice",
+			score=92,
+			band="prepare",
+		),
+	])
+	second = store.get_job(job_id)
+	assert second is not None
+	assert second["times_seen"] == 2
+
+	store.refresh_application_queue(min_score=75, ready_score=85)
+	queue = store.list_application_queue()
+	assert queue[0]["queue_state"] == "ready"
+	assert queue[0]["id"] == job_id
+
+
+def test_incremental_search_checkpoint_reuses_recent_jobs(tmp_path: Path) -> None:
+	store = JobStore(tmp_path / "jobs.db")
+	_seed_job(store, "cached-search")
+	store.record_job_discovery_terms(
+		source="computrabajo",
+		external_ids=["cached-search"],
+		keyword="Python Developer",
+		location="Colombia",
+	)
+	store.record_search_checkpoint(
+		source="computrabajo",
+		keyword="Python Developer",
+		location="Colombia",
+		found=1,
+		new_jobs=1,
+	)
+
+	assert store.search_due(
+		source="computrabajo",
+		keyword="Python Developer",
+		location="Colombia",
+		refresh_after_hours=6,
+	) is False
+	cached = store.jobs_for_search_term(keyword="Python Developer", location="Colombia", max_age_hours=72)
+	assert [job["external_id"] for job in cached] == ["cached-search"]
