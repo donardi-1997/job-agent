@@ -374,6 +374,7 @@ class CostAwareApplicationPreparer(BaseApplicationPreparer):
             model=requested_model,
             on_usage=persist_live_usage,
             usage_budget=ai_budget,
+            budget_db_path=self.store.path,
         )
         try:
             result_schema = RealApplicationDraftOutput if application_mode == "real" else ApplicationDraftOutput

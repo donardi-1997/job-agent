@@ -27,8 +27,11 @@ class BatchApplyRequest(BaseModel):
 	max_applications: int = Field(default=10, ge=1, le=25)
 	daily_limit: int = Field(default=20, ge=1, le=50)
 	max_search_terms: int = Field(default=8, ge=1, le=12)
-	max_ai_calls: int = Field(default=10, ge=0, le=100)
-	max_ai_cost_usd: float = Field(default=0.10, ge=0, le=10)
+	max_ai_calls: int = Field(default=0, ge=0, le=100)
+	max_ai_cost_usd: float = Field(default=0.0, ge=0, le=10)
+	refresh_after_hours: int = Field(default=6, ge=0, le=168)
+	reuse_recent_hours: int = Field(default=72, ge=1, le=720)
+	max_detail_pages_per_search: int = Field(default=3, ge=0, le=20)
 
 	@field_validator("keyword", "location")
 	@classmethod
@@ -43,6 +46,7 @@ class BatchApplyStatus(BaseModel):
 	search_terms: list[str] = Field(default_factory=list)
 	searches_completed: int = 0
 	searches_skipped_without_ai: int = 0
+	searches_skipped_recent: int = 0
 	location: str = ""
 	found: int = 0
 	eligible: int = 0
@@ -54,8 +58,8 @@ class BatchApplyStatus(BaseModel):
 	current_search_term: str = ""
 	ai_calls: int = 0
 	ai_cost_usd: float = 0.0
-	ai_max_calls: int = 10
-	ai_max_cost_usd: float = 0.10
+	ai_max_calls: int = 0
+	ai_max_cost_usd: float = 0.0
 	ai_budget_exhausted: bool = False
 	synced_applications: int = 0
 	message: str = ""
@@ -162,15 +166,41 @@ class BatchApplyRunner:
 			rows = connection.execute(query, [*external_ids, min_score]).fetchall()
 		jobs = [self.store._decode_row(row) for row in rows]
 		profile = self.profile_store.get()
-		return [job for job in jobs if not assess_hard_eligibility(job, profile).blocked]
+		eligible: list[dict[str, object]] = []
+		for job in jobs:
+			assessment = assess_hard_eligibility(job, profile)
+			job_id = int(job["id"])
+			if assessment.blocked:
+				self.store.queue_job(
+					job_id,
+					"blocked",
+					priority=int(job.get("score") or 0) * 100,
+					reason=assessment.reason,
+				)
+				continue
+			self.store.queue_job(
+				job_id,
+				"ready",
+				priority=int(job.get("score") or 0) * 100,
+				reason="Cumple score y filtros duros; lista para postulación.",
+			)
+			eligible.append(job)
+		return eligible
 
 	@staticmethod
 	def _is_access_block(result: object) -> bool:
 		blocked_reason = str(getattr(result, "blocked_reason", "") or "").casefold()
 		return any(token in blocked_reason for token in ("captcha", "2fa", "anti-bot", "bot detection", "access control"))
 
-	def _sync_before_applying(self) -> tuple[int, str]:
-		"""Best-effort read-only sync after discovery and before application selection."""
+	def _sync_before_applying(self, *, refresh_after_hours: int = 6) -> tuple[int, str]:
+		"""Best-effort read-only sync, cached so repeated batches do not reopen the browser."""
+		if refresh_after_hours > 0 and not self.store.search_due(
+			source="computrabajo_sync",
+			keyword="applications",
+			location="account",
+			refresh_after_hours=refresh_after_hours,
+		):
+			return 0, "Historial de postulaciones ya sincronizado recientemente; se reutiliza el estado local."
 		try:
 			result = asyncio.run(self.applications_reader.collect(max_results=500))
 			if result.login_required:
@@ -178,6 +208,13 @@ class BatchApplyRunner:
 			if result.blocked_reason:
 				return 0, f"No se sincronizó el historial: {result.blocked_reason}"
 			stats = self.applications_store.sync(result.applications)
+			self.store.record_search_checkpoint(
+				source="computrabajo_sync",
+				keyword="applications",
+				location="account",
+				found=int(stats["found"]),
+				new_jobs=0,
+			)
 			return int(stats["found"]), (
 				f"Historial sincronizado sin IA: {stats['found']} visibles, "
 				f"{stats['linked']} vinculadas, {stats['promoted']} estados reconciliados."
@@ -212,10 +249,33 @@ class BatchApplyRunner:
 			found_urls: set[str] = set()
 			searches_completed = 0
 			searches_skipped_without_ai = 0
+			searches_skipped_recent = 0
 
 			for term in search_terms:
 				if remaining_results <= 0:
 					break
+				if request.refresh_after_hours > 0 and not self.store.search_due(
+					source="computrabajo",
+					keyword=term,
+					location=request.location,
+					refresh_after_hours=request.refresh_after_hours,
+				):
+					cached_jobs = self.store.jobs_for_search_term(
+						keyword=term,
+						location=request.location,
+						max_age_hours=request.reuse_recent_hours,
+					)
+					for job in cached_jobs:
+						external_ids.add(str(job.get("external_id") or ""))
+						found_urls.add(str(job.get("url") or ""))
+					searches_skipped_recent += 1
+					remaining_results = max(0, request.max_results - len(found_urls))
+					self._set_status(
+						searches_skipped_recent=searches_skipped_recent,
+						found=len(found_urls),
+						message=f"Reutilizando resultados recientes de “{term}”; no se abrió el navegador.",
+					)
+					continue
 				term_limit = min(per_term, remaining_results)
 				self._set_status(
 					state="searching",
@@ -225,7 +285,12 @@ class BatchApplyRunner:
 				try:
 					search_output = asyncio.run(
 						self.collector._collect(
-							SearchRequest(keyword=term, location=request.location, max_results=term_limit),
+							SearchRequest(
+							keyword=term,
+							location=request.location,
+							max_results=term_limit,
+							max_detail_pages=min(request.max_detail_pages_per_search, term_limit),
+						),
 							ai_budget=budget,
 						)
 					)
@@ -247,7 +312,11 @@ class BatchApplyRunner:
 						continue
 					raise
 
-				self.collector._persist(search_output.jobs)
+				self.collector._persist(
+					search_output.jobs,
+					keyword=term,
+					location=request.location,
+				)
 				searches_completed += 1
 				for job in search_output.jobs:
 					url = str(job.url)
@@ -258,15 +327,22 @@ class BatchApplyRunner:
 				self._set_status(
 					searches_completed=searches_completed,
 					searches_skipped_without_ai=searches_skipped_without_ai,
+					searches_skipped_recent=searches_skipped_recent,
 					found=len(found_urls),
 					**self._budget_status(budget),
 				)
 
 			# Reconcile against Computrabajo after discovery so newly found local jobs
 			# can be linked to historical applications before eligibility is computed.
-			synced_count, sync_message = self._sync_before_applying()
+			if external_ids:
+				synced_count, sync_message = self._sync_before_applying(
+					refresh_after_hours=request.refresh_after_hours,
+				)
+			else:
+				synced_count, sync_message = 0, "Sin vacantes candidatas; no fue necesario abrir el historial de Computrabajo."
 			self._set_status(synced_applications=synced_count, message=sync_message)
 
+			self.store.refresh_application_queue(min_score=75, ready_score=request.min_score)
 			eligible_jobs = self._current_search_jobs(sorted(external_ids), request.min_score)
 			quota = min(request.max_applications, remaining_daily, len(eligible_jobs))
 			self.store.update_batch_run(run_id, found=len(found_urls), eligible=len(eligible_jobs))
@@ -298,6 +374,12 @@ class BatchApplyRunner:
 					message=f"Postulando a {job.get('title', 'vacante')}…",
 					**self._budget_status(budget),
 				)
+				self.store.queue_job(
+					job_id,
+					"applying",
+					priority=int(job.get("score") or 0) * 100,
+					reason="Postulación en ejecución.",
+				)
 				try:
 					result = asyncio.run(self.preparer._apply(job, ai_budget=budget))
 				except AIUsageBudgetExceeded:
@@ -322,6 +404,13 @@ class BatchApplyRunner:
 					self.store.update_status(job_id, "applied")
 				else:
 					blocked += 1
+					needs_user = any(item.requires_user_input for item in result.questions)
+					self.store.queue_job(
+						job_id,
+						"needs_user" if needs_user else "blocked",
+						priority=int(job.get("score") or 0) * 100,
+						reason=result.blocked_reason or result.summary or "Postulación no completada.",
+					)
 
 				self.store.update_batch_run(
 					run_id,
@@ -341,7 +430,8 @@ class BatchApplyRunner:
 
 			budget_state = budget.status()
 			message = (
-				f"Lote finalizado: {searches_completed} búsquedas, {len(found_urls)} vacantes únicas, "
+				f"Lote finalizado: {searches_completed} búsquedas nuevas + {searches_skipped_recent} reutilizadas, "
+				f"{len(found_urls)} vacantes únicas, "
 				f"{submitted} enviadas de {attempted} intentos. IA: {budget_state['calls']}/{budget_state['max_calls']} "
 				f"llamadas, US${budget_state['estimated_cost_usd']:.4f}/US${budget_state['max_cost_usd']:.2f}. "
 				f"{sync_message}"

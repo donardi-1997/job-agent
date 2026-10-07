@@ -180,7 +180,14 @@ class DeterministicComputrabajoSearch:
         self.profile_dir = Path(profile_dir)
         self.profile_dir.mkdir(parents=True, exist_ok=True)
 
-    async def collect(self, *, keyword: str, location: str, max_results: int) -> DeterministicSearchResult:
+    async def collect(
+        self,
+        *,
+        keyword: str,
+        location: str,
+        max_results: int,
+        max_detail_pages: int | None = None,
+    ) -> DeterministicSearchResult:
         variants = search_keyword_variants(keyword)
         search_url = build_search_url(variants[0] if variants else keyword, location)
         browser = Browser(
@@ -233,6 +240,8 @@ class DeterministicComputrabajoSearch:
 
             jobs: list[DeterministicJob] = []
             seen: set[str] = set()
+            detail_pages_opened = 0
+            detail_budget = max_results if max_detail_pages is None else max(0, min(max_results, max_detail_pages))
             for candidate in candidates:
                 if len(jobs) >= max_results:
                     break
@@ -246,14 +255,16 @@ class DeterministicComputrabajoSearch:
                 card_text = self._clean(str(candidate.get("card_text") or ""))
 
                 detail: dict[str, object] = {}
-                try:
-                    await self._navigate(cdp, url)
-                    extracted = await self._evaluate(cdp, self._detail_script())
-                    if isinstance(extracted, dict) and is_safe_computrabajo_url(str(extracted.get("url") or "")):
-                        detail = extracted
-                except Exception:
-                    # A single detail page must not invalidate all listing results.
-                    detail = {}
+                if detail_pages_opened < detail_budget:
+                    try:
+                        await self._navigate(cdp, url)
+                        detail_pages_opened += 1
+                        extracted = await self._evaluate(cdp, self._detail_script())
+                        if isinstance(extracted, dict) and is_safe_computrabajo_url(str(extracted.get("url") or "")):
+                            detail = extracted
+                    except Exception:
+                        # A single detail page must not invalidate all listing results.
+                        detail = {}
 
                 title = self._clean(str(detail.get("title") or card_title))
                 if not title:

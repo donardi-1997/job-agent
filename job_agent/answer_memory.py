@@ -23,6 +23,50 @@ def normalize_question(value: str) -> str:
     return " ".join(text.split())
 
 
+_CANONICAL_FACT_INTENTS = {
+    "city",
+    "english_level",
+    "salary",
+    "availability",
+    "total_experience_years",
+    "work_mode",
+    "contract_type",
+    "residence_yes_no",
+    "skill_yes_no",
+    "skill_experience_years",
+}
+
+
+def canonical_question_key(value: str) -> str:
+    """Collapse equivalent low-risk application questions into one local fact key."""
+    raw = normalize_question(value)
+    if not raw:
+        return ""
+    match = classify_question(value)
+    if match.intent not in _CANONICAL_FACT_INTENTS:
+        return raw
+    suffix = ""
+    if match.intent == "skill_experience_years":
+        skill_key = normalize_question(match.skill)
+        if not skill_key:
+            return raw
+        if match.required_years is not None:
+            suffix = f":{skill_key}:{match.required_years:g}:{match.year_comparison or 'eq'}"
+        else:
+            suffix = f":{skill_key}"
+    elif match.skill:
+        suffix = f":{normalize_question(match.skill)}"
+    elif match.mode:
+        suffix = f":{normalize_question(match.mode)}"
+    elif match.location:
+        suffix = f":{normalize_question(match.location)}"
+    elif match.required_cefr:
+        suffix = f":{normalize_question(match.required_cefr)}"
+    elif match.required_years is not None:
+        suffix = f":{match.required_years:g}:{match.year_comparison or 'eq'}"
+    return f"intent:{match.intent}{suffix}"
+
+
 class AnswerMemory:
     """Single-user local semantic memory for successfully used answers."""
 
@@ -74,7 +118,7 @@ class AnswerMemory:
         source: str = "application",
         confidence: int = 100,
     ) -> None:
-        normalized = normalize_question(question)
+        normalized = canonical_question_key(question)
         clean_answer = " ".join(answer.strip().split())
         if not normalized or not clean_answer:
             return
@@ -98,7 +142,7 @@ class AnswerMemory:
             )
 
     def forget(self, question: str) -> bool:
-        normalized = normalize_question(question)
+        normalized = canonical_question_key(question)
         if not normalized:
             return False
         with self._connect() as connection:
@@ -149,9 +193,14 @@ class AnswerMemory:
         candidates: list[dict[str, object]],
     ) -> tuple[dict[str, object], float] | None:
         normalized = normalize_question(question)
+        canonical = canonical_question_key(question)
         for row in candidates:
-            if str(row.get("question_normalized") or "") == normalized:
+            stored_key = str(row.get("question_normalized") or "")
+            if stored_key == canonical or stored_key == normalized:
                 return row, 1.0
+            candidate_question = str(row.get("question") or "")
+            if candidate_question and canonical_question_key(candidate_question) == canonical and canonical.startswith("intent:"):
+                return row, 0.99
 
         best: tuple[dict[str, object], float] | None = None
         for row in candidates:
@@ -286,7 +335,7 @@ class AnswerMemory:
         seen: set[str] = set()
 
         for row in self._rows(limit=limit, source="manual"):
-            normalized = str(row["question_normalized"])
+            normalized = canonical_question_key(str(row["question"])) or str(row["question_normalized"])
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 context.append(
@@ -298,13 +347,13 @@ class AnswerMemory:
                 )
 
         for item in profile.frequent_answers:
-            normalized = normalize_question(item.question)
+            normalized = canonical_question_key(item.question)
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 context.append({"question": item.question, "answer": item.answer, "source": "profile"})
 
         for row in self._rows(limit=limit):
-            normalized = str(row["question_normalized"])
+            normalized = canonical_question_key(str(row["question"])) or str(row["question_normalized"])
             if normalized not in seen:
                 seen.add(normalized)
                 context.append(

@@ -9,6 +9,7 @@ from typing import Iterable
 
 DEFAULT_DB_PATH = Path("data/job-agent.db")
 ALLOWED_STATUSES = {"discovered", "saved", "applied", "ignored"}
+QUEUE_STATES = {"scored", "shortlisted", "ready", "applying", "applied", "blocked", "needs_user", "ignored"}
 
 
 class ApplicationModeStore:
@@ -105,6 +106,9 @@ class JobStore:
 					match_reasons TEXT NOT NULL DEFAULT '[]',
 					matched_skills TEXT NOT NULL DEFAULT '[]',
 					missing_skills TEXT NOT NULL DEFAULT '[]',
+					first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					times_seen INTEGER NOT NULL DEFAULT 1,
 					created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 					UNIQUE(source, external_id)
 				);
@@ -133,6 +137,39 @@ class JobStore:
 				);
 				CREATE INDEX IF NOT EXISTS idx_application_attempts_job_id ON application_attempts(job_id, created_at DESC);
 
+				CREATE TABLE IF NOT EXISTS application_queue (
+					job_id INTEGER PRIMARY KEY,
+					state TEXT NOT NULL DEFAULT 'scored',
+					priority INTEGER NOT NULL DEFAULT 0,
+					reason TEXT NOT NULL DEFAULT '',
+					created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+				);
+				CREATE INDEX IF NOT EXISTS idx_application_queue_state_priority
+					ON application_queue(state, priority DESC, updated_at DESC);
+
+				CREATE TABLE IF NOT EXISTS search_checkpoints (
+					source TEXT NOT NULL,
+					keyword_normalized TEXT NOT NULL,
+					location_normalized TEXT NOT NULL,
+					last_run_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					found INTEGER NOT NULL DEFAULT 0,
+					new_jobs INTEGER NOT NULL DEFAULT 0,
+					PRIMARY KEY(source, keyword_normalized, location_normalized)
+				);
+
+				CREATE TABLE IF NOT EXISTS job_discovery_terms (
+					job_id INTEGER NOT NULL,
+					keyword_normalized TEXT NOT NULL,
+					location_normalized TEXT NOT NULL,
+					last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					PRIMARY KEY(job_id, keyword_normalized, location_normalized),
+					FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+				);
+				CREATE INDEX IF NOT EXISTS idx_job_discovery_terms_lookup
+					ON job_discovery_terms(keyword_normalized, location_normalized, last_seen_at DESC);
+
 				CREATE TABLE IF NOT EXISTS batch_runs (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
 					keyword TEXT NOT NULL,
@@ -158,10 +195,15 @@ class JobStore:
 				"match_reasons": "ALTER TABLE jobs ADD COLUMN match_reasons TEXT NOT NULL DEFAULT '[]'",
 				"matched_skills": "ALTER TABLE jobs ADD COLUMN matched_skills TEXT NOT NULL DEFAULT '[]'",
 				"missing_skills": "ALTER TABLE jobs ADD COLUMN missing_skills TEXT NOT NULL DEFAULT '[]'",
+				"first_seen_at": "ALTER TABLE jobs ADD COLUMN first_seen_at TEXT NOT NULL DEFAULT ''",
+				"last_seen_at": "ALTER TABLE jobs ADD COLUMN last_seen_at TEXT NOT NULL DEFAULT ''",
+				"times_seen": "ALTER TABLE jobs ADD COLUMN times_seen INTEGER NOT NULL DEFAULT 1",
 			}
 			for column, statement in migrations.items():
 				if column not in columns:
 					connection.execute(statement)
+			connection.execute("UPDATE jobs SET first_seen_at = created_at WHERE first_seen_at = ''")
+			connection.execute("UPDATE jobs SET last_seen_at = created_at WHERE last_seen_at = ''")
 
 	@staticmethod
 	def _decode_row(row: sqlite3.Row) -> dict[str, object]:
@@ -248,11 +290,13 @@ class JobStore:
 					"""
 					INSERT INTO jobs(
 						source, external_id, title, company, location, url, score, band, status,
-						description, match_reasons, matched_skills, missing_skills
+						description, match_reasons, matched_skills, missing_skills,
+						first_seen_at, last_seen_at, times_seen
 					)
 					VALUES(
 						:source, :external_id, :title, :company, :location, :url, :score, :band, :status,
-						:description, :match_reasons, :matched_skills, :missing_skills
+						:description, :match_reasons, :matched_skills, :missing_skills,
+						CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1
 					)
 					ON CONFLICT(source, external_id) DO UPDATE SET
 						title=excluded.title,
@@ -264,12 +308,232 @@ class JobStore:
 						description=excluded.description,
 						match_reasons=excluded.match_reasons,
 						matched_skills=excluded.matched_skills,
-						missing_skills=excluded.missing_skills
+						missing_skills=excluded.missing_skills,
+						last_seen_at=CURRENT_TIMESTAMP,
+						times_seen=jobs.times_seen + 1
 					""",
 					data,
 				)
 				count += 1
 		return count
+
+	def update_job_scores(self, jobs: Iterable[JobRecord]) -> int:
+		"""Update scoring metadata without pretending the vacancy was rediscovered."""
+		count = 0
+		with self.connect() as connection:
+			for job in jobs:
+				cursor = connection.execute(
+					"""
+					UPDATE jobs
+					SET title = ?, company = ?, location = ?, url = ?, score = ?, band = ?,
+					    description = ?, match_reasons = ?, matched_skills = ?, missing_skills = ?
+					WHERE source = ? AND external_id = ?
+					""",
+					(
+						job.title,
+						job.company,
+						job.location,
+						job.url,
+						job.score,
+						job.band,
+						job.description,
+						json.dumps(job.match_reasons, ensure_ascii=False),
+						json.dumps(job.matched_skills, ensure_ascii=False),
+						json.dumps(job.missing_skills, ensure_ascii=False),
+						job.source,
+						job.external_id,
+					),
+				)
+				count += max(0, cursor.rowcount)
+		return count
+
+	@staticmethod
+	def _normalize_search_value(value: object) -> str:
+		return " ".join(str(value or "").casefold().split())
+
+	def existing_external_ids(self, source: str, external_ids: Iterable[str]) -> set[str]:
+		values = [str(value) for value in external_ids if str(value)]
+		if not values:
+			return set()
+		placeholders = ",".join("?" for _ in values)
+		with self.connect() as connection:
+			rows = connection.execute(
+				f"SELECT external_id FROM jobs WHERE source = ? AND external_id IN ({placeholders})",
+				[source, *values],
+			).fetchall()
+		return {str(row["external_id"]) for row in rows}
+
+	def record_job_discovery_terms(
+		self,
+		*,
+		source: str,
+		external_ids: Iterable[str],
+		keyword: str,
+		location: str,
+	) -> None:
+		values = [str(value) for value in external_ids if str(value)]
+		if not values:
+			return
+		keyword_key = self._normalize_search_value(keyword)
+		location_key = self._normalize_search_value(location)
+		placeholders = ",".join("?" for _ in values)
+		with self.connect() as connection:
+			rows = connection.execute(
+				f"SELECT id FROM jobs WHERE source = ? AND external_id IN ({placeholders})",
+				[source, *values],
+			).fetchall()
+			for row in rows:
+				connection.execute(
+					"""
+					INSERT INTO job_discovery_terms(job_id, keyword_normalized, location_normalized, last_seen_at)
+					VALUES(?, ?, ?, CURRENT_TIMESTAMP)
+					ON CONFLICT(job_id, keyword_normalized, location_normalized) DO UPDATE SET
+						last_seen_at=CURRENT_TIMESTAMP
+					""",
+					(int(row["id"]), keyword_key, location_key),
+				)
+
+	def jobs_for_search_term(
+		self,
+		*,
+		keyword: str,
+		location: str,
+		max_age_hours: int = 72,
+	) -> list[dict[str, object]]:
+		keyword_key = self._normalize_search_value(keyword)
+		location_key = self._normalize_search_value(location)
+		age = f"-{max(1, int(max_age_hours))} hours"
+		with self.connect() as connection:
+			rows = connection.execute(
+				"""
+				SELECT j.*
+				FROM job_discovery_terms d
+				JOIN jobs j ON j.id = d.job_id
+				WHERE d.keyword_normalized = ?
+				  AND d.location_normalized = ?
+				  AND datetime(d.last_seen_at) >= datetime('now', ?)
+				ORDER BY j.score DESC, j.last_seen_at DESC
+				""",
+				(keyword_key, location_key, age),
+			).fetchall()
+		return [self._decode_row(row) for row in rows]
+
+	def search_due(
+		self,
+		*,
+		source: str,
+		keyword: str,
+		location: str,
+		refresh_after_hours: int = 6,
+	) -> bool:
+		keyword_key = self._normalize_search_value(keyword)
+		location_key = self._normalize_search_value(location)
+		with self.connect() as connection:
+			row = connection.execute(
+				"""
+				SELECT last_run_at FROM search_checkpoints
+				WHERE source = ? AND keyword_normalized = ? AND location_normalized = ?
+				""",
+				(source, keyword_key, location_key),
+			).fetchone()
+		if not row:
+			return True
+		with self.connect() as connection:
+			fresh = connection.execute(
+				"SELECT datetime(?) > datetime('now', ?)",
+				(str(row["last_run_at"]), f"-{max(0, int(refresh_after_hours))} hours"),
+			).fetchone()
+		return not bool(fresh and fresh[0])
+
+	def record_search_checkpoint(
+		self,
+		*,
+		source: str,
+		keyword: str,
+		location: str,
+		found: int,
+		new_jobs: int,
+	) -> None:
+		keyword_key = self._normalize_search_value(keyword)
+		location_key = self._normalize_search_value(location)
+		with self.connect() as connection:
+			connection.execute(
+				"""
+				INSERT INTO search_checkpoints(
+					source, keyword_normalized, location_normalized, last_run_at, found, new_jobs
+				) VALUES(?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+				ON CONFLICT(source, keyword_normalized, location_normalized) DO UPDATE SET
+					last_run_at=CURRENT_TIMESTAMP,
+					found=excluded.found,
+					new_jobs=excluded.new_jobs
+				""",
+				(source, keyword_key, location_key, int(found), int(new_jobs)),
+			)
+
+	def queue_job(self, job_id: int, state: str, *, priority: int = 0, reason: str = "") -> None:
+		if state not in QUEUE_STATES:
+			raise ValueError(f"Unsupported queue state: {state}")
+		with self.connect() as connection:
+			connection.execute(
+				"""
+				INSERT INTO application_queue(job_id, state, priority, reason, created_at, updated_at)
+				VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+				ON CONFLICT(job_id) DO UPDATE SET
+					state=excluded.state,
+					priority=excluded.priority,
+					reason=excluded.reason,
+					updated_at=CURRENT_TIMESTAMP
+				""",
+				(job_id, state, int(priority), str(reason)[:1000]),
+			)
+
+	def refresh_application_queue(self, *, min_score: int = 75, ready_score: int = 85) -> int:
+		jobs = self.list_jobs(limit=10000)
+		count = 0
+		for job in jobs:
+			job_id = int(job["id"])
+			status = str(job.get("status") or "discovered")
+			score = int(job.get("score") or 0)
+			if status == "applied":
+				state, reason = "applied", "Postulación ya confirmada."
+			elif status == "ignored":
+				state, reason = "ignored", "Vacante descartada por el usuario."
+			elif score >= ready_score:
+				state, reason = "ready", f"Score {score} ≥ {ready_score}; lista para postular."
+			elif score >= min_score:
+				state, reason = "shortlisted", f"Score {score} ≥ {min_score}; preseleccionada."
+			else:
+				state, reason = "scored", f"Score {score}; no consume navegador todavía."
+			self.queue_job(job_id, state, priority=score * 100, reason=reason)
+			count += 1
+		return count
+
+	def list_application_queue(self, *, limit: int = 100, state: str | None = None) -> list[dict[str, object]]:
+		query = """
+			SELECT q.state AS queue_state, q.priority, q.reason AS queue_reason,
+			       q.updated_at AS queue_updated_at, j.*
+			FROM application_queue q
+			JOIN jobs j ON j.id = q.job_id
+		"""
+		params: list[object] = []
+		if state:
+			query += " WHERE q.state = ?"
+			params.append(state)
+		query += " ORDER BY q.priority DESC, j.last_seen_at DESC LIMIT ?"
+		params.append(limit)
+		with self.connect() as connection:
+			rows = connection.execute(query, params).fetchall()
+		return [self._decode_row(row) for row in rows]
+
+	def queue_stats(self) -> dict[str, int]:
+		with self.connect() as connection:
+			rows = connection.execute(
+				"SELECT state, COUNT(*) AS total FROM application_queue GROUP BY state"
+			).fetchall()
+		result = {state: 0 for state in QUEUE_STATES}
+		for row in rows:
+			result[str(row["state"])] = int(row["total"])
+		return result
 
 	def get_job(self, job_id: int) -> dict[str, object] | None:
 		with self.connect() as connection:
@@ -287,6 +551,8 @@ class JobStore:
 			if current == "applied" and status != "applied":
 				raise ValueError("Una vacante con postulación confirmada no puede volver a un estado anterior.")
 			connection.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
+		queue_state = "applied" if status == "applied" else "ignored" if status == "ignored" else "shortlisted" if status == "saved" else "scored"
+		self.queue_job(job_id, queue_state, priority=int((self.get_job(job_id) or {}).get("score") or 0) * 100, reason=f"Estado de vacante: {status}.")
 		return self.get_job(job_id)
 
 	def save_application_draft(self, job_id: int, payload: dict[str, object]) -> dict[str, object]:
@@ -350,6 +616,15 @@ class JobStore:
 			)
 			if confirmed:
 				connection.execute("UPDATE jobs SET status = 'applied' WHERE id = ?", (job_id,))
+				connection.execute(
+					"""
+					INSERT INTO application_queue(job_id, state, priority, reason, created_at, updated_at)
+					VALUES(?, 'applied', 10000, 'Postulación confirmada.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+					ON CONFLICT(job_id) DO UPDATE SET
+						state='applied', priority=10000, reason='Postulación confirmada.', updated_at=CURRENT_TIMESTAMP
+					""",
+					(job_id,),
+				)
 			return int(cursor.lastrowid)
 
 	def list_application_attempts(self, job_id: int, limit: int = 20) -> list[dict[str, object]]:
@@ -413,7 +688,7 @@ class JobStore:
 		if status:
 			query += " AND status = ?"
 			params.append(status)
-		query += " ORDER BY score DESC, created_at DESC LIMIT ?"
+		query += " ORDER BY score DESC, last_seen_at DESC, created_at DESC LIMIT ?"
 		params.append(limit)
 		with self.connect() as connection:
 			return [self._decode_row(row) for row in connection.execute(query, params).fetchall()]
@@ -432,7 +707,7 @@ class JobStore:
 				FROM jobs
 				"""
 			).fetchone()
-			return dict(row) if row else {
+			result = dict(row) if row else {
 				"total": 0,
 				"high_match": 0,
 				"applied": 0,
@@ -440,3 +715,7 @@ class JobStore:
 				"ignored": 0,
 				"avg_score": 0,
 			}
+			queue = self.queue_stats()
+			result["queue_ready"] = queue.get("ready", 0)
+			result["queue_needs_user"] = queue.get("needs_user", 0)
+			return result

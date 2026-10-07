@@ -14,6 +14,7 @@ def test_search_request_normalizes_text_and_limits_results() -> None:
 	assert request.keyword == "Python Developer"
 	assert request.location == "Bogotá D.C."
 	assert request.max_results == 20
+	assert request.max_detail_pages == 5
 
 	with pytest.raises(ValidationError):
 		SearchRequest(keyword="x", location="Colombia", max_results=20)
@@ -86,6 +87,8 @@ def test_rescore_existing_jobs_uses_professional_summary_and_preserves_status(tm
 	)
 	collector._persist([job])
 	before = store.list_jobs()[0]
+	before_times_seen = int(before["times_seen"])
+	before_last_seen_at = str(before["last_seen_at"])
 	store.update_status(int(before["id"]), "applied")
 
 	current = collector.profile_store.get()
@@ -100,7 +103,9 @@ def test_rescore_existing_jobs_uses_professional_summary_and_preserves_status(tm
 	assert after is not None
 	assert int(after["score"]) < int(before["score"])
 	assert after["status"] == "applied"
-	assert any("Professional context matches" in reason for reason in after["match_reasons"])
+	assert int(after["times_seen"]) == before_times_seen
+	assert str(after["last_seen_at"]) == before_last_seen_at
+	assert any("Contexto profesional" in reason for reason in after["match_reasons"])
 
 
 def test_task_is_read_only() -> None:
@@ -109,3 +114,34 @@ def test_task_is_read_only() -> None:
 	assert "Do not apply" in task
 	assert "do not click any final application/submission button" in task
 	assert "CAPTCHA" in task
+
+
+
+def test_discovery_applies_hard_eligibility_before_queueing(tmp_path: Path) -> None:
+	store = JobStore(tmp_path / "jobs.db")
+	collector = ComputrabajoCollector(store=store, profile_dir=tmp_path / "browser-profile")
+	collector.profile_store.save(
+		UserProfile(
+			target_roles=["Python Developer"],
+			skills=["Python", "AWS"],
+			years_experience=5,
+			english_level="A2",
+			preferred_locations=["Colombia"],
+		)
+	)
+	job = ExtractedJob(
+		title="Python Developer",
+		company="Example SAS",
+		location="Colombia",
+		description="Python AWS. Inglés C1 obligatorio. Mínimo 3 años de experiencia.",
+		url="https://co.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-python-hard-filter-HARD1",
+	)
+
+	collector._persist([job], keyword="Python Developer", location="Colombia")
+	stored = store.list_jobs()[0]
+
+	assert stored["score"] == 0
+	assert stored["band"] == "ignore"
+	assert any("inglés C1" in reason for reason in stored["match_reasons"])
+	queue = store.list_application_queue()
+	assert queue[0]["queue_state"] == "scored"

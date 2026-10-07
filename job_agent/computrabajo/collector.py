@@ -14,6 +14,7 @@ from browser_use import Agent, Browser
 from job_agent.ai_usage import AIUsageBudget, AIUsageStore, MeteredChatBrowserUse, UsageSnapshot
 from job_agent.computrabajo.browser_config import allowed_domains
 from job_agent.computrabajo.deterministic import DeterministicComputrabajoSearch, SearchExecutionStore
+from job_agent.computrabajo.eligibility import assess_hard_eligibility
 from job_agent.computrabajo.job_validation import is_valid_computrabajo_job
 from job_agent.profile import ProfileStore
 from job_agent.scoring import JobPosting, score_job
@@ -32,6 +33,7 @@ class SearchRequest(BaseModel):
 	keyword: str = Field(min_length=2, max_length=120)
 	location: str = Field(default="Colombia", min_length=2, max_length=120)
 	max_results: int = Field(default=20, ge=1, le=50)
+	max_detail_pages: int = Field(default=5, ge=0, le=50)
 	allow_ai_fallback: bool = False
 
 	@field_validator("keyword", "location")
@@ -107,7 +109,7 @@ class ComputrabajoCollector:
 	def _worker(self, request: SearchRequest) -> None:
 		try:
 			result = asyncio.run(self._collect(request))
-			persisted = self._persist(result.jobs)
+			persisted = self._persist(result.jobs, keyword=request.keyword, location=request.location)
 			info = self.last_collection_info()
 			mode = info["mode"]
 			label = "sin IA" if mode == "deterministic" else "con fallback de IA"
@@ -258,6 +260,7 @@ class ComputrabajoCollector:
 			model=requested_model,
 			on_usage=persist_live_usage,
 			usage_budget=ai_budget,
+			budget_db_path=self.store.path,
 		)
 		try:
 			agent = Agent(
@@ -309,6 +312,7 @@ Return only actual vacancies on co.computrabajo.com.
 		url: str,
 		description: str,
 		status: str = "discovered",
+		first_seen_at: str = "",
 	) -> JobRecord:
 		settings = self.profile_store.get()
 		profile = settings.to_candidate_profile()
@@ -319,8 +323,25 @@ Return only actual vacancies on co.computrabajo.com.
 			location=location,
 			description=description,
 			url=url,
+			first_seen_at=first_seen_at,
 		)
 		match = score_job(posting, profile, preferences)
+		hard_eligibility = assess_hard_eligibility(
+			{
+				"title": title,
+				"description": description,
+				"location": location,
+				"company": company,
+			},
+			settings,
+		)
+		score = 0 if hard_eligibility.blocked else match.score
+		band = "ignore" if hard_eligibility.blocked else match.decision
+		reasons = (
+			(hard_eligibility.reason, f"Filtro duro: {hard_eligibility.code}", *match.reasons)
+			if hard_eligibility.blocked
+			else match.reasons
+		)
 		text = f"{title} {description}".casefold()
 		matched_skills = tuple(skill for skill in profile.skills if skill.casefold() in text)
 		missing_skills = tuple(skill for skill in profile.skills if skill.casefold() not in text)
@@ -332,22 +353,31 @@ Return only actual vacancies on co.computrabajo.com.
 			company=company,
 			location=location,
 			url=url,
-			score=match.score,
-			band=match.decision,
+			score=score,
+			band=band,
 			status=status,
 			description=description,
-			match_reasons=match.reasons,
+			match_reasons=reasons,
 			matched_skills=matched_skills,
 			missing_skills=missing_skills,
 		)
 
-	def _persist(self, jobs: list[ExtractedJob]) -> int:
+	def _persist(
+		self,
+		jobs: list[ExtractedJob],
+		*,
+		keyword: str = "",
+		location: str = "",
+	) -> int:
 		records: list[JobRecord] = []
+		external_ids: list[str] = []
 		for item in self._valid_jobs(jobs):
 			url = str(item.url)
+			external_id = hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
+			external_ids.append(external_id)
 			records.append(
 				self._record_for_job(
-					external_id=hashlib.sha256(url.encode("utf-8")).hexdigest()[:24],
+					external_id=external_id,
 					title=item.title,
 					company=item.company,
 					location=item.location,
@@ -355,7 +385,24 @@ Return only actual vacancies on co.computrabajo.com.
 					description=item.description,
 				)
 			)
-		return self.store.upsert_jobs(records)
+		existing = self.store.existing_external_ids("computrabajo", external_ids)
+		persisted = self.store.upsert_jobs(records)
+		if keyword:
+			self.store.record_job_discovery_terms(
+				source="computrabajo",
+				external_ids=external_ids,
+				keyword=keyword,
+				location=location,
+			)
+			self.store.record_search_checkpoint(
+				source="computrabajo",
+				keyword=keyword,
+				location=location,
+				found=len(external_ids),
+				new_jobs=len(set(external_ids) - existing),
+			)
+		self.store.refresh_application_queue()
+		return persisted
 
 	def rescore_existing_jobs(self) -> int:
 		"""Recalculate all stored Computrabajo vacancies after the local profile changes."""
@@ -379,8 +426,10 @@ Return only actual vacancies on co.computrabajo.com.
 					url=str(job.get("url") or ""),
 					description=str(job.get("description") or ""),
 					status=str(job.get("status") or "discovered"),
+					first_seen_at=str(job.get("first_seen_at") or job.get("created_at") or ""),
 				)
 			)
 		if records:
-			self.store.upsert_jobs(records)
+			self.store.update_job_scores(records)
+			self.store.refresh_application_queue()
 		return len(records)

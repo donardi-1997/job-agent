@@ -168,3 +168,38 @@ def test_record_safely_never_breaks_workflow(tmp_path: Path) -> None:
     store.record = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("telemetry failed"))  # type: ignore[method-assign]
 
     assert store.record_safely("search", llm.snapshot()) is None
+
+
+
+def test_persistent_daily_budget_blocks_before_paid_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "jobs.db"
+    store = AIUsageStore(path)
+    with store._connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO ai_usage_events(
+                operation, provider, model, prompt_tokens, cached_tokens,
+                completion_tokens, total_tokens, estimated_cost_usd, pricing_known
+            ) VALUES('application', 'browser-use', 'bu-2-0', 1, 0, 1, 2, 0.24, 1)
+            """
+        )
+
+    monkeypatch.setenv("JOB_AGENT_DAILY_AI_BUDGET_USD", "0.25")
+    monkeypatch.setenv("JOB_AGENT_MONTHLY_AI_BUDGET_USD", "5")
+    monkeypatch.setenv("JOB_AGENT_AI_CALL_RESERVE_USD", "0.02")
+    llm = MeteredChatBrowserUse(model="bu-2-0", api_key="test-key", budget_db_path=path)
+
+    with pytest.raises(AIUsageBudgetExceeded, match="diario global"):
+        llm._enforce_persistent_budget()
+
+
+def test_usage_summary_exposes_global_budget_remaining(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JOB_AGENT_DAILY_AI_BUDGET_USD", "0.25")
+    monkeypatch.setenv("JOB_AGENT_MONTHLY_AI_BUDGET_USD", "5")
+    store = AIUsageStore(tmp_path / "jobs.db")
+
+    summary = store.summary()
+
+    assert summary["budget"]["daily_limit_usd"] == 0.25
+    assert summary["budget"]["monthly_limit_usd"] == 5.0
+    assert summary["budget"]["daily_remaining_usd"] == 0.25

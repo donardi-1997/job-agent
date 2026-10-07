@@ -38,7 +38,7 @@ def test_excluded_c1_requirement_is_ignored() -> None:
 	assert result.decision == "ignore"
 
 
-def test_professional_summary_contributes_fifteen_percent_without_ai() -> None:
+def test_professional_summary_contributes_context_component_without_ai() -> None:
 	base_profile = CandidateProfile(
 		target_roles=("backend developer",),
 		skills=("python", "fastapi", "aws"),
@@ -66,8 +66,7 @@ def test_professional_summary_contributes_fifteen_percent_without_ai() -> None:
 
 	assert result.score > base_result.score
 	assert result.decision == "prepare"
-	assert any("Professional context matches" in reason for reason in result.reasons)
-	assert any("Context overlap" in reason for reason in result.reasons)
+	assert any("Contexto profesional" in reason for reason in result.reasons)
 
 
 def test_professional_summary_distinguishes_contextually_unrelated_jobs() -> None:
@@ -96,3 +95,37 @@ def test_professional_summary_distinguishes_contextually_unrelated_jobs() -> Non
 	unrelated_result = score_job(unrelated, profile, SearchPreferences())
 
 	assert relevant_result.score > unrelated_result.score
+
+
+
+def test_scoring_v2_rewards_fresh_strategic_matches() -> None:
+	profile = CandidateProfile(
+		target_roles=("aws developer",),
+		skills=("python", "aws", "lambda", "bedrock"),
+		years_experience=5,
+		preferred_locations=("Colombia",),
+		professional_summary="AWS Certified Developer Associate. Python AWS Lambda Bedrock RAG serverless.",
+	)
+	fresh = JobPosting(
+		title="AWS Developer",
+		company="Example",
+		location="Colombia",
+		description="Python AWS Lambda Bedrock serverless. AWS certification preferred.",
+		url="https://example.test/fresh",
+	)
+	stale = JobPosting(
+		title=fresh.title,
+		company=fresh.company,
+		location=fresh.location,
+		description=fresh.description,
+		url="https://example.test/stale",
+		first_seen_at="2020-01-01 00:00:00",
+	)
+
+	fresh_result = score_job(fresh, profile, SearchPreferences())
+	stale_result = score_job(stale, profile, SearchPreferences())
+
+	assert fresh_result.score > stale_result.score
+	assert fresh_result.decision == "prepare"
+	assert any("Cloud/certificaciones" in reason for reason in fresh_result.reasons)
+	assert any("Recencia" in reason for reason in fresh_result.reasons)
