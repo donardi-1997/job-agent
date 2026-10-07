@@ -31,7 +31,7 @@ class BatchApplyRequest(BaseModel):
 	max_ai_cost_usd: float = Field(default=0.0, ge=0, le=10)
 	refresh_after_hours: int = Field(default=6, ge=0, le=168)
 	reuse_recent_hours: int = Field(default=72, ge=1, le=720)
-	max_detail_pages_per_search: int = Field(default=4, ge=0, le=20)
+	max_detail_pages_per_search: int = Field(default=3, ge=0, le=20)
 
 	@field_validator("keyword", "location")
 	@classmethod
@@ -192,8 +192,15 @@ class BatchApplyRunner:
 		blocked_reason = str(getattr(result, "blocked_reason", "") or "").casefold()
 		return any(token in blocked_reason for token in ("captcha", "2fa", "anti-bot", "bot detection", "access control"))
 
-	def _sync_before_applying(self) -> tuple[int, str]:
-		"""Best-effort read-only sync after discovery and before application selection."""
+	def _sync_before_applying(self, *, refresh_after_hours: int = 6) -> tuple[int, str]:
+		"""Best-effort read-only sync, cached so repeated batches do not reopen the browser."""
+		if refresh_after_hours > 0 and not self.store.search_due(
+			source="computrabajo_sync",
+			keyword="applications",
+			location="account",
+			refresh_after_hours=refresh_after_hours,
+		):
+			return 0, "Historial de postulaciones ya sincronizado recientemente; se reutiliza el estado local."
 		try:
 			result = asyncio.run(self.applications_reader.collect(max_results=500))
 			if result.login_required:
@@ -201,6 +208,13 @@ class BatchApplyRunner:
 			if result.blocked_reason:
 				return 0, f"No se sincronizó el historial: {result.blocked_reason}"
 			stats = self.applications_store.sync(result.applications)
+			self.store.record_search_checkpoint(
+				source="computrabajo_sync",
+				keyword="applications",
+				location="account",
+				found=int(stats["found"]),
+				new_jobs=0,
+			)
 			return int(stats["found"]), (
 				f"Historial sincronizado sin IA: {stats['found']} visibles, "
 				f"{stats['linked']} vinculadas, {stats['promoted']} estados reconciliados."
@@ -320,7 +334,12 @@ class BatchApplyRunner:
 
 			# Reconcile against Computrabajo after discovery so newly found local jobs
 			# can be linked to historical applications before eligibility is computed.
-			synced_count, sync_message = self._sync_before_applying()
+			if external_ids:
+				synced_count, sync_message = self._sync_before_applying(
+					refresh_after_hours=request.refresh_after_hours,
+				)
+			else:
+				synced_count, sync_message = 0, "Sin vacantes candidatas; no fue necesario abrir el historial de Computrabajo."
 			self._set_status(synced_applications=synced_count, message=sync_message)
 
 			self.store.refresh_application_queue(min_score=75, ready_score=request.min_score)
