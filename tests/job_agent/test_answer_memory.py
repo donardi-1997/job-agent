@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from job_agent.answer_memory import AnswerMemory, normalize_question
+from job_agent.answer_memory import AnswerMemory, canonical_question_key, normalize_question
 from job_agent.profile import FrequentAnswer, UserProfile
 
 
@@ -72,3 +72,22 @@ def test_only_successful_high_confidence_answers_are_learned(tmp_path: Path) -> 
 
     assert memory.remember_questions(questions, submitted=True) == 1
     assert memory.stats()["answers"] == 1
+
+
+
+def test_canonical_question_key_collapses_salary_paraphrases() -> None:
+    first = canonical_question_key("¿Cuál es tu aspiración salarial?")
+    second = canonical_question_key("Indica tu salario esperado")
+
+    assert first == "intent:salary"
+    assert second == first
+
+
+def test_canonical_memory_reuses_fact_without_fuzzy_search(tmp_path: Path) -> None:
+    memory = AnswerMemory(tmp_path / "jobs.db")
+    profile = UserProfile()
+    memory.remember("¿Cuál es tu aspiración salarial?", "5.000.000 COP", source="manual")
+
+    assert memory.resolve("Indica tu salario esperado", profile) == "5.000.000 COP"
+    rows = memory._rows(source="manual")
+    assert rows[0]["question_normalized"] == "intent:salary"
