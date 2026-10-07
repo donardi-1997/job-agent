@@ -42,6 +42,7 @@ JOB_STATUS_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/status$")
 JOB_PREPARE_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/prepare$")
 JOB_DRAFT_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/draft$")
 JOB_ATTEMPTS_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/attempts$")
+JOB_CV_RE = re.compile(r"^/api/jobs/(?P<job_id>\d+)/cv$")
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -158,6 +159,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
 			status = query.get("status", [None])[0] or None
 			self._send_json(self.store.list_jobs(min_score=min_score, status=status))
 			return
+		match = JOB_CV_RE.match(parsed.path)
+		if match:
+			job = self.store.get_job(int(match.group("job_id")))
+			if not job:
+				self._send_json({"error": "Vacante no encontrada."}, HTTPStatus.NOT_FOUND)
+				return
+			variant = self.cv_profile.select_for_job(job)
+			if not variant:
+				self._send_json({"configured": False, "variant": None})
+				return
+			variant = {key: value for key, value in variant.items() if key != "text_content"}
+			self._send_json({"configured": True, "variant": variant})
+			return
 		match = JOB_DETAIL_RE.match(parsed.path)
 		if match:
 			job = self.store.get_job(int(match.group("job_id")))
@@ -193,6 +207,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
 			if parsed.path == "/api/application/mode":
 				self._send_json({"mode": self.application_mode_store.set(body.get("mode", ""))})
 				return
+			if parsed.path == "/api/cv/select":
+				variant_key = body.get("variant_key")
+				if not isinstance(variant_key, str) or not variant_key.strip():
+					raise ValueError("variant_key is required")
+				self.cv_profile.activate_variant(variant_key.strip())
+				self._send_json({"cv": self.cv_profile.status(), "profile": self.profile_store.get().model_dump()})
+				return
 			if parsed.path == "/api/cv":
 				filename = body.get("filename")
 				encoded = body.get("content_base64")
@@ -204,7 +225,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
 					content = base64.b64decode(encoded, validate=True)
 				except (binascii.Error, ValueError) as exc:
 					raise ValueError("El contenido del CV no es base64 válido.") from exc
-				result = self.cv_profile.import_bytes(filename, content)
+				variant_name = body.get("variant_name", "Principal")
+				activate = body.get("activate", True)
+				if not isinstance(variant_name, str):
+					raise ValueError("variant_name must be a string")
+				if not isinstance(activate, bool):
+					raise ValueError("activate must be a boolean")
+				result = self.cv_profile.import_bytes(filename, content, variant_name=variant_name, activate=activate)
 				self._send_json(
 					{
 						"cv": self.cv_profile.status(),
