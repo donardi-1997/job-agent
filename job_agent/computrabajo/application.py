@@ -443,7 +443,11 @@ class AssistedApplicationPreparer:
                 },
             )
 
-        llm = MeteredChatBrowserUse(model=requested_model, on_usage=persist_live_usage)
+        llm = MeteredChatBrowserUse(
+            model=requested_model,
+            on_usage=persist_live_usage,
+            budget_db_path=self.store.path,
+        )
         try:
             result_schema = RealApplicationDraftOutput if application_mode == "real" else ApplicationDraftOutput
             agent = Agent(
