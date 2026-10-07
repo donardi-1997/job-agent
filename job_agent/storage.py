@@ -317,6 +317,36 @@ class JobStore:
 				count += 1
 		return count
 
+	def update_job_scores(self, jobs: Iterable[JobRecord]) -> int:
+		"""Update scoring metadata without pretending the vacancy was rediscovered."""
+		count = 0
+		with self.connect() as connection:
+			for job in jobs:
+				cursor = connection.execute(
+					"""
+					UPDATE jobs
+					SET title = ?, company = ?, location = ?, url = ?, score = ?, band = ?,
+					    description = ?, match_reasons = ?, matched_skills = ?, missing_skills = ?
+					WHERE source = ? AND external_id = ?
+					""",
+					(
+						job.title,
+						job.company,
+						job.location,
+						job.url,
+						job.score,
+						job.band,
+						job.description,
+						json.dumps(job.match_reasons, ensure_ascii=False),
+						json.dumps(job.matched_skills, ensure_ascii=False),
+						json.dumps(job.missing_skills, ensure_ascii=False),
+						job.source,
+						job.external_id,
+					),
+				)
+				count += max(0, cursor.rowcount)
+		return count
+
 	@staticmethod
 	def _normalize_search_value(value: object) -> str:
 		return " ".join(str(value or "").casefold().split())
