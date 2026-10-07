@@ -33,6 +33,7 @@ def test_batch_request_validates_limits() -> None:
 	assert request.max_ai_cost_usd == 0
 	assert request.refresh_after_hours == 6
 	assert request.reuse_recent_hours == 72
+	assert request.max_detail_pages_per_search == 3
 
 	with pytest.raises(ValidationError):
 		BatchApplyRequest(keyword="Python", max_applications=26)
