@@ -20,6 +20,7 @@ from job_agent.computrabajo.deterministic_application import (
     DeterministicApplicationRunner,
 )
 from job_agent.credentials import CredentialStore
+from job_agent.cv_profile import CVProfileService
 from job_agent.profile import ProfileStore
 from job_agent.storage import ApplicationModeStore, JobStore
 
@@ -90,6 +91,7 @@ class AssistedApplicationPreparer:
         self.answer_memory = AnswerMemory(self.store.path)
         self.usage_store = AIUsageStore(self.store.path)
         self.credential_store = CredentialStore(self.store.path)
+        self.cv_profile = CVProfileService(self.store.path)
         self.application_execution_store = ApplicationExecutionStore(self.store.path)
         self.pattern_store = ApplicationPatternStore(self.store.path)
         self.profile_dir = Path(profile_dir)
@@ -271,6 +273,12 @@ class AssistedApplicationPreparer:
     async def _apply(self, job: dict[str, object]) -> ApplicationDraftOutput:
         load_dotenv()
         profile = self.profile_store.get()
+        selected_cv = self.cv_profile.select_for_job(job)
+        resume_path = self.cv_profile.path_for_job(job)
+        if selected_cv and selected_cv.get("text_content"):
+            profile = profile.model_copy(
+                update={"professional_summary": str(selected_cv["text_content"])[:12000]}
+            )
         if not profile.automation_enabled:
             raise RuntimeError("La automatización está desactivada. No se inició una nueva postulación.")
 
@@ -287,6 +295,7 @@ class AssistedApplicationPreparer:
                 profile=profile,
                 saved_draft=saved_draft,
                 mode=application_mode,
+                resume_path=resume_path,
             )
 
             # TEST mode is deliberately deterministic-only. This is the backend safety
