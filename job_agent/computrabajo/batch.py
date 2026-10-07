@@ -31,6 +31,7 @@ class BatchApplyRequest(BaseModel):
 	max_ai_cost_usd: float = Field(default=0.0, ge=0, le=10)
 	refresh_after_hours: int = Field(default=6, ge=0, le=168)
 	reuse_recent_hours: int = Field(default=72, ge=1, le=720)
+	max_detail_pages_per_search: int = Field(default=4, ge=0, le=20)
 
 	@field_validator("keyword", "location")
 	@classmethod
@@ -270,7 +271,12 @@ class BatchApplyRunner:
 				try:
 					search_output = asyncio.run(
 						self.collector._collect(
-							SearchRequest(keyword=term, location=request.location, max_results=term_limit),
+							SearchRequest(
+							keyword=term,
+							location=request.location,
+							max_results=term_limit,
+							max_detail_pages=min(request.max_detail_pages_per_search, term_limit),
+						),
 							ai_budget=budget,
 						)
 					)
