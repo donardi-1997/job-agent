@@ -120,7 +120,8 @@ def _skill_score(job_text: str, skills: tuple[str, ...]) -> tuple[int, tuple[str
 	matched = tuple(skill for skill in skills if _normalize(skill) and _normalize(skill) in job_text)
 	# A long CV should not be punished for having many verified skills. Five
 	# relevant matches are enough to receive the full skill component.
-	points = round(min(1.0, len(matched) / 5) * WEIGHTS["skills"])
+	target = max(1, min(5, len(skills)))
+	points = round(min(1.0, len(matched) / target) * WEIGHTS["skills"])
 	return points, matched
 
 
@@ -144,7 +145,8 @@ def _required_experience_years(text: str) -> float | None:
 def _experience_score(job_text: str, profile: CandidateProfile) -> tuple[int, float | None]:
 	required = _required_experience_years(job_text)
 	if required is None:
-		return (8 if profile.years_experience > 0 else 5), None
+		# No explicit experience barrier: do not penalize an otherwise strong match.
+		return WEIGHTS["experience"], None
 	if profile.years_experience <= 0:
 		return 3, required
 	if profile.years_experience < required:
@@ -160,7 +162,7 @@ def _cloud_certification_score(job_text: str, profile: CandidateProfile) -> tupl
 		for signal in _STRATEGIC_SIGNALS
 		if signal in job_text and signal in profile_text
 	)
-	points = min(12, len(matched) * 3)
+	points = min(12, (8 + max(0, len(matched) - 1) * 2) if matched else 0)
 	job_requests_cert = any(signal in job_text for signal in _CERTIFICATION_SIGNALS)
 	profile_has_cert = any(signal in profile_text for signal in _CERTIFICATION_SIGNALS)
 	if job_requests_cert and profile_has_cert:
