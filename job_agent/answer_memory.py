@@ -46,7 +46,15 @@ def canonical_question_key(value: str) -> str:
     if match.intent not in _CANONICAL_FACT_INTENTS:
         return raw
     suffix = ""
-    if match.skill:
+    if match.intent == "skill_experience_years":
+        skill_key = normalize_question(match.skill)
+        if not skill_key:
+            return raw
+        if match.required_years is not None:
+            suffix = f":{skill_key}:{match.required_years:g}:{match.year_comparison or 'eq'}"
+        else:
+            suffix = f":{skill_key}"
+    elif match.skill:
         suffix = f":{normalize_question(match.skill)}"
     elif match.mode:
         suffix = f":{normalize_question(match.mode)}"
