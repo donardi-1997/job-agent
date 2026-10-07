@@ -29,8 +29,10 @@ def test_batch_request_validates_limits() -> None:
 	assert request.max_applications == 10
 	assert request.daily_limit == 20
 	assert request.max_search_terms == 8
-	assert request.max_ai_calls == 10
-	assert request.max_ai_cost_usd == 0.10
+	assert request.max_ai_calls == 0
+	assert request.max_ai_cost_usd == 0
+	assert request.refresh_after_hours == 6
+	assert request.reuse_recent_hours == 72
 
 	with pytest.raises(ValidationError):
 		BatchApplyRequest(keyword="Python", max_applications=26)
@@ -42,6 +44,8 @@ def test_batch_request_validates_limits() -> None:
 		BatchApplyRequest(max_ai_calls=-1)
 	with pytest.raises(ValidationError):
 		BatchApplyRequest(max_ai_cost_usd=-0.01)
+	with pytest.raises(ValidationError):
+		BatchApplyRequest(refresh_after_hours=169)
 
 
 def test_batch_can_be_configured_as_zero_ai() -> None:
