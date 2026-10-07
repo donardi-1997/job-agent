@@ -258,6 +258,7 @@ class ComputrabajoCollector:
 			model=requested_model,
 			on_usage=persist_live_usage,
 			usage_budget=ai_budget,
+			budget_db_path=self.store.path,
 		)
 		try:
 			agent = Agent(
