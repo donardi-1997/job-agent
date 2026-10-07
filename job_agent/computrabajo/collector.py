@@ -32,6 +32,7 @@ class SearchRequest(BaseModel):
 	keyword: str = Field(min_length=2, max_length=120)
 	location: str = Field(default="Colombia", min_length=2, max_length=120)
 	max_results: int = Field(default=20, ge=1, le=50)
+	max_detail_pages: int = Field(default=5, ge=0, le=50)
 	allow_ai_fallback: bool = False
 
 	@field_validator("keyword", "location")
