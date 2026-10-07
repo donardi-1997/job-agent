@@ -14,6 +14,7 @@ from browser_use import Agent, Browser
 from job_agent.ai_usage import AIUsageBudget, AIUsageStore, MeteredChatBrowserUse, UsageSnapshot
 from job_agent.computrabajo.browser_config import allowed_domains
 from job_agent.computrabajo.deterministic import DeterministicComputrabajoSearch, SearchExecutionStore
+from job_agent.computrabajo.eligibility import assess_hard_eligibility
 from job_agent.computrabajo.job_validation import is_valid_computrabajo_job
 from job_agent.profile import ProfileStore
 from job_agent.scoring import JobPosting, score_job
@@ -325,6 +326,22 @@ Return only actual vacancies on co.computrabajo.com.
 			first_seen_at=first_seen_at,
 		)
 		match = score_job(posting, profile, preferences)
+		hard_eligibility = assess_hard_eligibility(
+			{
+				"title": title,
+				"description": description,
+				"location": location,
+				"company": company,
+			},
+			settings,
+		)
+		score = 0 if hard_eligibility.blocked else match.score
+		band = "ignore" if hard_eligibility.blocked else match.decision
+		reasons = (
+			(hard_eligibility.reason, f"Filtro duro: {hard_eligibility.code}", *match.reasons)
+			if hard_eligibility.blocked
+			else match.reasons
+		)
 		text = f"{title} {description}".casefold()
 		matched_skills = tuple(skill for skill in profile.skills if skill.casefold() in text)
 		missing_skills = tuple(skill for skill in profile.skills if skill.casefold() not in text)
@@ -336,11 +353,11 @@ Return only actual vacancies on co.computrabajo.com.
 			company=company,
 			location=location,
 			url=url,
-			score=match.score,
-			band=match.decision,
+			score=score,
+			band=band,
 			status=status,
 			description=description,
-			match_reasons=match.reasons,
+			match_reasons=reasons,
 			matched_skills=matched_skills,
 			missing_skills=missing_skills,
 		)
