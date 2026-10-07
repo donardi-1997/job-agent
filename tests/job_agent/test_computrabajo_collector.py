@@ -114,3 +114,34 @@ def test_task_is_read_only() -> None:
 	assert "Do not apply" in task
 	assert "do not click any final application/submission button" in task
 	assert "CAPTCHA" in task
+
+
+
+def test_discovery_applies_hard_eligibility_before_queueing(tmp_path: Path) -> None:
+	store = JobStore(tmp_path / "jobs.db")
+	collector = ComputrabajoCollector(store=store, profile_dir=tmp_path / "browser-profile")
+	collector.profile_store.save(
+		UserProfile(
+			target_roles=["Python Developer"],
+			skills=["Python", "AWS"],
+			years_experience=5,
+			english_level="A2",
+			preferred_locations=["Colombia"],
+		)
+	)
+	job = ExtractedJob(
+		title="Python Developer",
+		company="Example SAS",
+		location="Colombia",
+		description="Python AWS. Inglés C1 obligatorio. Mínimo 3 años de experiencia.",
+		url="https://co.computrabajo.com/ofertas-de-trabajo/oferta-de-trabajo-de-python-hard-filter-HARD1",
+	)
+
+	collector._persist([job], keyword="Python Developer", location="Colombia")
+	stored = store.list_jobs()[0]
+
+	assert stored["score"] == 0
+	assert stored["band"] == "ignore"
+	assert any("inglés C1" in reason for reason in stored["match_reasons"])
+	queue = store.list_application_queue()
+	assert queue[0]["queue_state"] == "scored"
