@@ -38,7 +38,7 @@ def test_excluded_c1_requirement_is_ignored() -> None:
 	assert result.decision == "ignore"
 
 
-def test_professional_summary_contributes_fifteen_percent_without_ai() -> None:
+def test_professional_summary_contributes_context_component_without_ai() -> None:
 	base_profile = CandidateProfile(
 		target_roles=("backend developer",),
 		skills=("python", "fastapi", "aws"),
@@ -66,8 +66,7 @@ def test_professional_summary_contributes_fifteen_percent_without_ai() -> None:
 
 	assert result.score > base_result.score
 	assert result.decision == "prepare"
-	assert any("Professional context matches" in reason for reason in result.reasons)
-	assert any("Context overlap" in reason for reason in result.reasons)
+	assert any("Contexto profesional" in reason for reason in result.reasons)
 
 
 def test_professional_summary_distinguishes_contextually_unrelated_jobs() -> None:
