@@ -100,6 +100,7 @@ class CompactQuestionResolver:
             model=requested_model,
             on_usage=persist_usage,
             usage_budget=ai_budget,
+            budget_db_path=self.store.path,
         )
         system = SystemMessage(
             content=(
