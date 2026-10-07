@@ -20,7 +20,7 @@ on:
       - 'releases/**'
     tags:
       - '*'
-  pull_request:
+  pull_request:\n    branches-ignore:\n      - develop/computrabajo-agent
   workflow_dispatch:
 
 jobs:
