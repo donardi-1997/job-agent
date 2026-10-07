@@ -139,6 +139,12 @@ class AssistedApplicationPreparer:
                 job_id=job_id,
                 message="Intentando primero la postulación local sin IA…",
             )
+            self.store.queue_job(
+                job_id,
+                "applying",
+                priority=int(job.get("score") or 0) * 100,
+                reason="Postulación individual en ejecución.",
+            )
         threading.Thread(target=self._worker, args=(job_id,), daemon=True, name="application-runner").start()
         return True
 
@@ -153,6 +159,15 @@ class AssistedApplicationPreparer:
             self.store.save_application_attempt(job_id, payload)
             if result.submitted:
                 self.store.update_status(job_id, "applied")
+            else:
+                needs_user = any(item.requires_user_input for item in result.questions)
+                job_score = int((self.store.get_job(job_id) or {}).get("score") or 0)
+                self.store.queue_job(
+                    job_id,
+                    "needs_user" if needs_user else "blocked",
+                    priority=job_score * 100,
+                    reason=result.blocked_reason or result.summary or "Postulación no completada.",
+                )
             message = (
                 result.confirmation_text
                 if result.submitted and result.confirmation_text
