@@ -120,6 +120,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
 		if parsed.path == "/api/stats":
 			self._send_json(self.store.stats())
 			return
+		if parsed.path == "/api/queue":
+			query = parse_qs(parsed.query)
+			state = query.get("state", [None])[0] or None
+			self._send_json(self.store.list_application_queue(state=state))
+			return
+		if parsed.path == "/api/efficiency":
+			self._send_json(
+				{
+					"jobs": self.store.stats(),
+					"queue": self.store.queue_stats(),
+					"answers": self.answer_memory.stats(),
+					"search": self.collector.search_efficiency(),
+					"applications": self.preparer.application_efficiency(),
+					"ai": self.ai_usage_store.summary(),
+				}
+			)
+			return
 		if parsed.path == "/api/ai/usage":
 			payload = self.ai_usage_store.summary()
 			payload["answer_memory"] = self.answer_memory.stats()
