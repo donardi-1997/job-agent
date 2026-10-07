@@ -106,6 +106,9 @@ class JobStore:
 					match_reasons TEXT NOT NULL DEFAULT '[]',
 					matched_skills TEXT NOT NULL DEFAULT '[]',
 					missing_skills TEXT NOT NULL DEFAULT '[]',
+					first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					times_seen INTEGER NOT NULL DEFAULT 1,
 					created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 					UNIQUE(source, external_id)
 				);
@@ -287,11 +290,13 @@ class JobStore:
 					"""
 					INSERT INTO jobs(
 						source, external_id, title, company, location, url, score, band, status,
-						description, match_reasons, matched_skills, missing_skills
+						description, match_reasons, matched_skills, missing_skills,
+						first_seen_at, last_seen_at, times_seen
 					)
 					VALUES(
 						:source, :external_id, :title, :company, :location, :url, :score, :band, :status,
-						:description, :match_reasons, :matched_skills, :missing_skills
+						:description, :match_reasons, :matched_skills, :missing_skills,
+						CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1
 					)
 					ON CONFLICT(source, external_id) DO UPDATE SET
 						title=excluded.title,
