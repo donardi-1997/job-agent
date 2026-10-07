@@ -229,17 +229,25 @@ def score_job(
 	cloud_points, strategic_matches = _cloud_certification_score(text, profile)
 	location_points = _location_score(job, profile)
 	context_points, context_matches, context_target = _professional_context_score(profile.professional_summary, text)
+	context_adjustment = context_points
+	if profile.professional_summary.strip() and context_points == 0:
+		# When the user supplied a rich professional summary, zero meaningful
+		# overlap is evidence that keyword matches alone may be misleading.
+		context_adjustment = -(WEIGHTS["context"] // 2)
 	freshness_points, age_days = _freshness_score(job.first_seen_at)
 
-	score = min(
-		100,
-		role_points
-		+ skill_points
-		+ experience_points
-		+ cloud_points
-		+ location_points
-		+ context_points
-		+ freshness_points,
+	score = max(
+		0,
+		min(
+			100,
+			role_points
+			+ skill_points
+			+ experience_points
+			+ cloud_points
+			+ location_points
+			+ context_adjustment
+			+ freshness_points,
+		),
 	)
 
 	reasons.append(f"Cargo objetivo: +{role_points}/{WEIGHTS['role']} ({role_hits} coincidencia(s))")
@@ -259,10 +267,16 @@ def score_job(
 	)
 	reasons.append(f"Ubicación/modalidad: +{location_points}/{WEIGHTS['location']}")
 	if profile.professional_summary.strip():
-		reasons.append(
-			f"Contexto profesional: +{context_points}/{WEIGHTS['context']} "
-			f"({len(context_matches)}/{context_target} señales)"
-		)
+		if context_adjustment < 0:
+			reasons.append(
+				f"Contexto profesional: {context_adjustment}/{WEIGHTS['context']} "
+				f"(sin señales relevantes compartidas)"
+			)
+		else:
+			reasons.append(
+				f"Contexto profesional: +{context_points}/{WEIGHTS['context']} "
+				f"({len(context_matches)}/{context_target} señales)"
+			)
 	if age_days is None:
 		reasons.append(f"Recencia: +{freshness_points}/{WEIGHTS['freshness']}")
 	else:
