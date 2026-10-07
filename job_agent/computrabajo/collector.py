@@ -107,7 +107,7 @@ class ComputrabajoCollector:
 	def _worker(self, request: SearchRequest) -> None:
 		try:
 			result = asyncio.run(self._collect(request))
-			persisted = self._persist(result.jobs)
+			persisted = self._persist(result.jobs, keyword=request.keyword, location=request.location)
 			info = self.last_collection_info()
 			mode = info["mode"]
 			label = "sin IA" if mode == "deterministic" else "con fallback de IA"
@@ -310,6 +310,7 @@ Return only actual vacancies on co.computrabajo.com.
 		url: str,
 		description: str,
 		status: str = "discovered",
+		first_seen_at: str = "",
 	) -> JobRecord:
 		settings = self.profile_store.get()
 		profile = settings.to_candidate_profile()
@@ -320,6 +321,7 @@ Return only actual vacancies on co.computrabajo.com.
 			location=location,
 			description=description,
 			url=url,
+			first_seen_at=first_seen_at,
 		)
 		match = score_job(posting, profile, preferences)
 		text = f"{title} {description}".casefold()
@@ -342,13 +344,22 @@ Return only actual vacancies on co.computrabajo.com.
 			missing_skills=missing_skills,
 		)
 
-	def _persist(self, jobs: list[ExtractedJob]) -> int:
+	def _persist(
+		self,
+		jobs: list[ExtractedJob],
+		*,
+		keyword: str = "",
+		location: str = "",
+	) -> int:
 		records: list[JobRecord] = []
+		external_ids: list[str] = []
 		for item in self._valid_jobs(jobs):
 			url = str(item.url)
+			external_id = hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
+			external_ids.append(external_id)
 			records.append(
 				self._record_for_job(
-					external_id=hashlib.sha256(url.encode("utf-8")).hexdigest()[:24],
+					external_id=external_id,
 					title=item.title,
 					company=item.company,
 					location=item.location,
@@ -356,7 +367,24 @@ Return only actual vacancies on co.computrabajo.com.
 					description=item.description,
 				)
 			)
-		return self.store.upsert_jobs(records)
+		existing = self.store.existing_external_ids("computrabajo", external_ids)
+		persisted = self.store.upsert_jobs(records)
+		if keyword:
+			self.store.record_job_discovery_terms(
+				source="computrabajo",
+				external_ids=external_ids,
+				keyword=keyword,
+				location=location,
+			)
+			self.store.record_search_checkpoint(
+				source="computrabajo",
+				keyword=keyword,
+				location=location,
+				found=len(external_ids),
+				new_jobs=len(set(external_ids) - existing),
+			)
+		self.store.refresh_application_queue()
+		return persisted
 
 	def rescore_existing_jobs(self) -> int:
 		"""Recalculate all stored Computrabajo vacancies after the local profile changes."""
@@ -380,6 +408,7 @@ Return only actual vacancies on co.computrabajo.com.
 					url=str(job.get("url") or ""),
 					description=str(job.get("description") or ""),
 					status=str(job.get("status") or "discovered"),
+					first_seen_at=str(job.get("first_seen_at") or job.get("created_at") or ""),
 				)
 			)
 		if records:
