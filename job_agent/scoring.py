@@ -162,7 +162,7 @@ def _cloud_certification_score(job_text: str, profile: CandidateProfile) -> tupl
 		for signal in _STRATEGIC_SIGNALS
 		if signal in job_text and signal in profile_text
 	)
-	points = min(12, (8 + max(0, len(matched) - 1) * 2) if matched else 0)
+	points = min(12, (10 + max(0, len(matched) - 1)) if matched else 0)
 	job_requests_cert = any(signal in job_text for signal in _CERTIFICATION_SIGNALS)
 	profile_has_cert = any(signal in profile_text for signal in _CERTIFICATION_SIGNALS)
 	if job_requests_cert and profile_has_cert:
